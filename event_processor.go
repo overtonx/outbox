@@ -245,7 +245,7 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 
 	query := `
 		SELECT id, event_id, event_type, aggregate_type, aggregate_id, 
-		       status, topic, payload, trace_id, span_id, 
+		       status, topic, payload, headers, 
 		       attempt_count, next_attempt_at
 		FROM outbox_events 
 		WHERE (status = 0) OR (status = 2 AND next_attempt_at <= NOW())
@@ -268,8 +268,6 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 		var event EventRecord
 		var status int
 		var nextAttemptAt sql.NullTime
-		var traceID sql.NullString
-		var spanID sql.NullString
 
 		err := rows.Scan(
 			&event.ID,
@@ -280,8 +278,7 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 			&status,
 			&event.Topic,
 			&event.Payload,
-			&traceID,
-			&spanID,
+			&event.Headers,
 			&event.AttemptCount,
 			&nextAttemptAt,
 		)
@@ -290,12 +287,6 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 			continue
 		}
 
-		if traceID.Valid {
-			event.TraceID = traceID.String
-		}
-		if spanID.Valid {
-			event.SpanID = spanID.String
-		}
 		if nextAttemptAt.Valid {
 			event.NextAttemptAt = &nextAttemptAt.Time
 		}

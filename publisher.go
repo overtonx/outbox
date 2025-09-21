@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -149,11 +150,13 @@ func buildKafkaHeaders(event EventRecord) []kafka.Header {
 		{Key: "aggregate_id", Value: []byte(event.AggregateID)},
 	}
 
-	if event.TraceID != "" {
-		headers = append(headers, kafka.Header{Key: "trace_id", Value: []byte(event.TraceID)})
-	}
-	if event.SpanID != "" {
-		headers = append(headers, kafka.Header{Key: "span_id", Value: []byte(event.SpanID)})
+	if len(event.Headers) > 0 {
+		var eventHeaders map[string]interface{}
+		if err := json.Unmarshal(event.Headers, &eventHeaders); err == nil {
+			for k, v := range eventHeaders {
+				headers = append(headers, kafka.Header{Key: k, Value: []byte(fmt.Sprintf("%v", v))})
+			}
+		}
 	}
 
 	return headers

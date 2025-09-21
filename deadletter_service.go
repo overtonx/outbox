@@ -45,7 +45,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 
 	query := `
 		SELECT id, event_id, event_type, aggregate_type, aggregate_id, topic, 
-		       payload, trace_id, span_id, attempt_count, last_error, created_at
+		       payload, headers, attempt_count, last_error, created_at
 		FROM outbox_events 
 		WHERE status = ? 
 		LIMIT ?
@@ -73,8 +73,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 			&event.AggregateID,
 			&event.Topic,
 			&event.Payload,
-			&event.TraceID,
-			&event.SpanID,
+			&event.Headers,
 			&event.AttemptCount,
 			&lastError,
 			&event.CreatedAt,
@@ -99,8 +98,8 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 	insertQuery := `
 		INSERT INTO outbox_deadletters 
 		(id, event_id, event_type, aggregate_type, aggregate_id, topic, payload, 
-		 trace_id, span_id, attempt_count, last_error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 headers, attempt_count, last_error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	movedCount := 0
@@ -113,8 +112,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 			event.AggregateID,
 			event.Topic,
 			event.Payload,
-			event.TraceID,
-			event.SpanID,
+			event.Headers,
 			event.AttemptCount,
 			nullString(event.LastError),
 			event.CreatedAt,

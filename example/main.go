@@ -13,7 +13,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"go.uber.org/zap"
 
-	"github.com/overtonx/outbox"
+	"github.com/overtonx/outbox/v2"
 )
 
 func main() {
@@ -25,7 +25,7 @@ func main() {
 	defer logger.Sync()
 
 	// Подключаемся к базе данных
-	db, err := sql.Open("mysql", "outbox_user:outbox_pass@tcp(localhost:3306)/outbox_db?parseTime=true")
+	db, err := sql.Open("mysql", "root:password@tcp(localhost:3306)/outbox_db_v2?parseTime=true")
 	if err != nil {
 		logger.Fatal("Failed to connect to database", zap.Error(err))
 	}
@@ -170,7 +170,11 @@ func createSampleEvents(ctx context.Context, db *sql.DB, logger *zap.Logger) {
 			eventData.aggregateID,
 			eventData.topic,
 			eventData.payload,
+			map[string]string{
+				"foo": "bar",
+			},
 		)
+
 		if err != nil {
 			logger.Error("Failed to create outbox event",
 				zap.String("event_id", eventData.eventID),
@@ -179,7 +183,7 @@ func createSampleEvents(ctx context.Context, db *sql.DB, logger *zap.Logger) {
 		}
 
 		// Сохраняем событие с автоматическим извлечением trace info
-		if err := outbox.SaveEventWithTrace(ctx, tx, event); err != nil {
+		if err := outbox.SaveEvent(ctx, tx, event); err != nil {
 			logger.Error("Failed to save outbox event",
 				zap.String("event_id", eventData.eventID),
 				zap.Error(err))

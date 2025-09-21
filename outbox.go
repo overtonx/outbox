@@ -8,7 +8,7 @@ import (
 	"fmt"
 
 	"github.com/go-sql-driver/mysql"
-	"go.opentelemetry.io/otel/trace"
+	"go.opentelemetry.io/otel"
 )
 
 var (
@@ -16,17 +16,16 @@ var (
 )
 
 type Event struct {
-	EventID       string      `json:"event_id"`
-	EventType     string      `json:"event_type"`
-	AggregateType string      `json:"aggregate_type"`
-	AggregateID   string      `json:"aggregate_id"`
-	Topic         string      `json:"topic"`
-	Payload       interface{} `json:"payload"`
-	TraceID       string      `json:"trace_id,omitempty"`
-	SpanID        string      `json:"span_id,omitempty"`
+	EventID       string            `json:"event_id"`
+	EventType     string            `json:"event_type"`
+	AggregateType string            `json:"aggregate_type"`
+	AggregateID   string            `json:"aggregate_id"`
+	Topic         string            `json:"topic"`
+	Payload       interface{}       `json:"payload"`
+	Headers       map[string]string `json:"headers"`
 }
 
-func NewOutboxEvent(eventID, eventType, aggregateType, aggregateID, topic string, payload interface{}) (Event, error) {
+func NewOutboxEvent(eventID, eventType, aggregateType, aggregateID, topic string, payload interface{}, headers map[string]string) (Event, error) {
 	event := Event{
 		EventID:       eventID,
 		EventType:     eventType,
@@ -34,6 +33,7 @@ func NewOutboxEvent(eventID, eventType, aggregateType, aggregateID, topic string
 		AggregateID:   aggregateID,
 		Topic:         topic,
 		Payload:       payload,
+		Headers:       headers,
 	}
 
 	if err := validateOutboxEvent(event); err != nil {
@@ -48,27 +48,28 @@ func SaveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
 		return fmt.Errorf("validation failed: %w", err)
 	}
 
-	eventWithTrace := event
-	if event.TraceID == "" || event.SpanID == "" {
-		traceID, spanID := extractTraceInfo(ctx)
-		if event.TraceID == "" {
-			eventWithTrace.TraceID = traceID
-		}
-		if event.SpanID == "" {
-			eventWithTrace.SpanID = spanID
-		}
-	}
+	carrie := NewMessageCarrier(&event)
+	otel.GetTextMapPropagator().Inject(ctx, carrie)
 
 	query := `
 		INSERT INTO outbox_events 
-		(event_id, event_type, aggregate_type, aggregate_id, topic, payload, trace_id, span_id, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		(event_id, event_type, aggregate_type, aggregate_id, topic, payload, headers, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	payloadJSON, err := json.Marshal(event.Payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
 	}
+
+	var headersJSON []byte
+	if len(event.Headers) > 0 {
+		headersJSON, err = json.Marshal(event.Headers)
+		if err != nil {
+			return fmt.Errorf("failed to marshal headers: %w", err)
+		}
+	}
+
 	_, err = tx.ExecContext(ctx, query,
 		event.EventID,
 		event.EventType,
@@ -76,8 +77,7 @@ func SaveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
 		event.AggregateID,
 		event.Topic,
 		payloadJSON,
-		nullString(event.TraceID),
-		nullString(event.SpanID),
+		headersJSON,
 		EventRecordStatusNew,
 	)
 
@@ -98,40 +98,6 @@ func convertFromDBError(err error) error {
 	}
 
 	return err
-}
-
-func SaveEventWithTrace(ctx context.Context, tx *sql.Tx, event Event) error {
-	traceID, spanID := extractTraceInfo(ctx)
-	event.TraceID = traceID
-	event.SpanID = spanID
-
-	return SaveEvent(ctx, tx, event)
-}
-
-func SaveEventRecord(ctx context.Context, tx *sql.Tx, event EventRecord) error {
-	query := `
-		INSERT INTO outbox_events 
-		(event_id, event_type, aggregate_type, aggregate_id, topic, payload, trace_id, span_id, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	_, err := tx.ExecContext(ctx, query,
-		event.EventID,
-		event.EventType,
-		event.AggregateType,
-		event.AggregateID,
-		event.Topic,
-		event.Payload,
-		nullString(event.TraceID),
-		nullString(event.SpanID),
-		EventRecordStatusNew,
-	)
-
-	if err != nil {
-		return fmt.Errorf("failed to save outbox event: %w", err)
-	}
-
-	return nil
 }
 
 func ensureOutboxTable(ctx context.Context, db *sql.DB) error {
@@ -159,8 +125,7 @@ func createOutboxEventsTable(ctx context.Context, db *sql.DB) error {
 			status          INT          NOT NULL DEFAULT 0 COMMENT '0 - new, 1 - success, 2 - retry, 3 - error, 4 - processing',
 			topic           VARCHAR(255) NOT NULL,
 			payload         JSON         NOT NULL,
-			trace_id        CHAR(36)     NULL,
-			span_id         CHAR(36)     NULL,
+			headers         JSON         NULL,
 			attempt_count   INT          NOT NULL DEFAULT 0,
 			next_attempt_at TIMESTAMP    NULL,
 			last_error      TEXT         NULL,
@@ -191,8 +156,7 @@ func createOutboxDeadlettersTable(ctx context.Context, db *sql.DB) error {
 		    aggregate_id    VARCHAR(255)  NOT NULL,
 		    topic           VARCHAR(255)  NOT NULL,
 		    payload         JSON          NOT NULL,
-		    trace_id        CHAR(36)      NULL,
-		    span_id         CHAR(36)      NULL,
+		    headers         JSON          NULL,
 		    attempt_count   INT           NOT NULL,
 		    last_error      VARCHAR(2000) NULL,
 		    created_at      TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
@@ -205,15 +169,6 @@ func createOutboxDeadlettersTable(ctx context.Context, db *sql.DB) error {
 	}
 
 	return nil
-}
-
-func extractTraceInfo(ctx context.Context) (traceID, spanID string) {
-	span := trace.SpanFromContext(ctx)
-	if span.SpanContext().IsValid() {
-		traceID = span.SpanContext().TraceID().String()
-		spanID = span.SpanContext().SpanID().String()
-	}
-	return traceID, spanID
 }
 
 func validateOutboxEvent(event Event) error {

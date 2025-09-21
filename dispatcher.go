@@ -63,9 +63,8 @@ type EventRecord struct {
 	EventID       string
 	EventType     string
 	Payload       []byte
+	Headers       []byte
 	Topic         string
-	TraceID       string
-	SpanID        string
 	AttemptCount  int
 	NextAttemptAt *time.Time
 }
@@ -78,8 +77,7 @@ type DeadLetterRecord struct {
 	AggregateID   string
 	Topic         string
 	Payload       []byte
-	TraceID       *string
-	SpanID        *string
+	Headers       []byte
 	AttemptCount  int
 	LastError     string
 	CreatedAt     time.Time

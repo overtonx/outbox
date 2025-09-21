@@ -14,7 +14,7 @@ func TestNewOutboxEvent(t *testing.T) {
 		Name: "test name",
 	}
 
-	event, err := NewOutboxEvent("1", "test", "event", "2", "topic", payload)
+	event, err := NewOutboxEvent("1", "test", "event", "2", "topic", payload, map[string]string{})
 	require.NoError(t, err)
 
 	jsonRaw, err := json.Marshal(event.Payload)

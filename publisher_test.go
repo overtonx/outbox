@@ -95,8 +95,6 @@ func TestBuildKafkaHeaders(t *testing.T) {
 		EventType:     "test-event-type",
 		AggregateType: "test-aggregate-type",
 		AggregateID:   "test-aggregate-id",
-		TraceID:       "test-trace-id",
-		SpanID:        "test-span-id",
 	}
 
 	headers := buildKafkaHeaders(event)
@@ -106,8 +104,6 @@ func TestBuildKafkaHeaders(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
-		"trace_id":       "test-trace-id",
-		"span_id":        "test-span-id",
 	}
 
 	assert.Equal(t, len(expectedHeaders), len(headers))
@@ -129,8 +125,6 @@ func TestBuildKafkaHeadersWithoutTraceInfo(t *testing.T) {
 		EventType:     "test-event-type",
 		AggregateType: "test-aggregate-type",
 		AggregateID:   "test-aggregate-id",
-		TraceID:       "",
-		SpanID:        "",
 	}
 
 	headers := buildKafkaHeaders(event)

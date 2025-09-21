@@ -4,7 +4,7 @@ go 1.23.0
 
 require (
 	github.com/go-sql-driver/mysql v1.7.1
-	github.com/overtonx/outbox v1.0.0
+	github.com/overtonx/outbox/v2 v2.0.0
 	go.uber.org/zap v1.24.0
 )
 
