@@ -9,26 +9,6 @@ import (
 	"go.uber.org/zap"
 )
 
-func TestNewDefaultPublisher(t *testing.T) {
-	logger := zap.NewNop()
-	publisher := NewDefaultPublisher(logger)
-
-	assert.NotNil(t, publisher, "Expected non-nil publisher")
-	assert.Equal(t, logger, publisher.logger, "Expected logger to match")
-}
-
-func TestDefaultPublisherPublish(t *testing.T) {
-	publisher := NewDefaultPublisher(zap.NewNop())
-	event := EventRecord{
-		EventID: "test-event-id",
-	}
-
-	ctx := context.Background()
-	err := publisher.Publish(ctx, event)
-
-	assert.NoError(t, err, "Expected no error")
-}
-
 func TestDefaultKafkaConfig(t *testing.T) {
 	config := DefaultKafkaConfig()
 

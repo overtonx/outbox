@@ -2,127 +2,78 @@ package outbox
 
 import (
 	"context"
-	"database/sql"
-	"fmt"
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/storage"
 )
 
+// CleanupServiceImpl выполняет очистку старых записей.
 type CleanupServiceImpl struct {
-	db                  *sql.DB
+	store               storage.Store
 	logger              *zap.Logger
-	batchSize           int
-	deadLetterRetention time.Duration
-	sentEventsRetention time.Duration
 	metrics             MetricsCollector
+	sentEventRetention  time.Duration
+	deadLetterRetention time.Duration
 }
 
+// NewCleanupService создает новый экземпляр CleanupServiceImpl.
 func NewCleanupService(
-	db *sql.DB,
+	store storage.Store,
 	logger *zap.Logger,
-	batchSize int,
-	deadLetterRetention time.Duration,
-	sentEventsRetention time.Duration,
 	metrics MetricsCollector,
+	sentEventRetention time.Duration,
+	deadLetterRetention time.Duration,
 ) *CleanupServiceImpl {
 	if metrics == nil {
 		metrics = NewNoOpMetricsCollector()
 	}
-
+	if logger == nil {
+		logger = zap.NewNop()
+	}
 	return &CleanupServiceImpl{
-		db:                  db,
+		store:               store,
 		logger:              logger,
-		batchSize:           batchSize,
-		deadLetterRetention: deadLetterRetention,
-		sentEventsRetention: sentEventsRetention,
 		metrics:             metrics,
+		sentEventRetention:  sentEventRetention,
+		deadLetterRetention: deadLetterRetention,
 	}
 }
 
+// Cleanup - это workFunc для воркера, который выполняет очистку.
 func (s *CleanupServiceImpl) Cleanup(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
 		s.metrics.RecordDuration("cleanup.duration", time.Since(start), nil)
 	}()
 
-	deadLetterCount, err := s.cleanupDeadLetters(ctx)
+	s.logger.Info("Starting cleanup process")
+
+	// Очистка успешно отправленных событий
+	sentDeleted, err := s.store.DeleteSentEvents(ctx, s.sentEventRetention)
 	if err != nil {
-		s.logger.Error("Failed to cleanup deadletters", zap.Error(err))
+		s.logger.Error("Failed to clean up sent events", zap.Error(err))
+		s.metrics.IncrementCounter("cleanup.sent_events.failed", nil)
+	} else if sentDeleted > 0 {
+		s.logger.Info("Cleaned up sent events", zap.Int64("count", sentDeleted))
+		s.metrics.RecordGauge("cleanup.sent_events.deleted", float64(sentDeleted), nil)
 	}
 
-	sentEventCount, err := s.cleanupSentEvents(ctx)
+	// Очистка событий из DLQ
+	dlDeleted, err := s.store.DeleteDeadLetterEvents(ctx, s.deadLetterRetention)
 	if err != nil {
-		s.logger.Error("Failed to cleanup sent events", zap.Error(err))
+		s.logger.Error("Failed to clean up dead-letter events", zap.Error(err))
+		s.metrics.IncrementCounter("cleanup.dead_letter.failed", nil)
+	} else if dlDeleted > 0 {
+		s.logger.Info("Cleaned up dead-letter events", zap.Int64("count", dlDeleted))
+		s.metrics.RecordGauge("cleanup.dead_letter.deleted", float64(dlDeleted), nil)
 	}
 
-	totalCleaned := deadLetterCount + sentEventCount
-	s.logger.Info("Cleanup completed",
-		zap.Int64("deadletters_cleaned", deadLetterCount),
-		zap.Int64("sent_events_cleaned", sentEventCount),
-		zap.Int64("total_cleaned", totalCleaned))
+	s.logger.Info("Cleanup process finished")
+	s.metrics.IncrementCounter("cleanup.executed", nil)
 
-	s.metrics.IncrementCounter("cleanup.executed", map[string]string{"status": "success"})
-	s.metrics.RecordGauge("cleanup.deadletters_cleaned", float64(deadLetterCount), nil)
-	s.metrics.RecordGauge("cleanup.sent_events_cleaned", float64(sentEventCount), nil)
-
+	// В данной реализации воркер очистки всегда возвращает nil,
+	// чтобы не останавливать его работу из-за ошибок очистки.
 	return nil
-}
-
-func (s *CleanupServiceImpl) cleanupDeadLetters(ctx context.Context) (int64, error) {
-	cutoffTime := time.Now().Add(-s.deadLetterRetention)
-
-	query := `
-		DELETE FROM outbox_deadletters 
-		WHERE created_at < ?
-		LIMIT ?
-	`
-
-	result, err := s.db.ExecContext(ctx, query, cutoffTime, s.batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup deadletters: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected > 0 {
-		s.logger.Info("Cleaned up old deadletters",
-			zap.Int64("deleted_count", rowsAffected),
-			zap.Time("cutoff_time", cutoffTime),
-			zap.Duration("retention_period", s.deadLetterRetention))
-	}
-
-	return rowsAffected, nil
-}
-
-func (s *CleanupServiceImpl) cleanupSentEvents(ctx context.Context) (int64, error) {
-	cutoffTime := time.Now().Add(-s.sentEventsRetention)
-
-	query := `
-		DELETE FROM outbox_events 
-		WHERE status = ? AND created_at < ?
-		LIMIT ?
-	`
-
-	result, err := s.db.ExecContext(ctx, query, EventRecordStatusSent, cutoffTime, s.batchSize)
-	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup sent events: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected > 0 {
-		s.logger.Info("Cleaned up old sent events",
-			zap.Int64("deleted_count", rowsAffected),
-			zap.Time("cutoff_time", cutoffTime),
-			zap.Duration("retention_period", s.sentEventsRetention))
-	}
-
-	return rowsAffected, nil
 }
