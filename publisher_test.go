@@ -144,3 +144,36 @@ func TestBuildKafkaHeadersWithoutTraceInfo(t *testing.T) {
 		assert.Equal(t, expectedValue, string(header.Value), "Header value mismatch")
 	}
 }
+
+func TestBuildKafkaHeadersWithCustomHeaders(t *testing.T) {
+	publisher, err := NewKafkaPublisher(zap.NewNop())
+	assert.NoError(t, err)
+	defer publisher.Close()
+
+	event := EventRecord{
+		EventID:       "test-event-id",
+		EventType:     "test-event-type",
+		AggregateType: "test-aggregate-type",
+		AggregateID:   "test-aggregate-id",
+		Headers:       []byte(`{"custom_key":"custom_value","another":"value"}`),
+	}
+
+	headers := buildKafkaHeaders(event)
+
+	expectedHeaders := map[string]string{
+		"event_id":       "test-event-id",
+		"event_type":     "test-event-type",
+		"aggregate_type": "test-aggregate-type",
+		"aggregate_id":   "test-aggregate-id",
+		"custom_key":     "custom_value",
+		"another":        "value",
+	}
+
+	assert.Equal(t, len(expectedHeaders), len(headers))
+
+	for _, header := range headers {
+		expectedValue, exists := expectedHeaders[header.Key]
+		assert.True(t, exists, "Unexpected header key: %s", header.Key)
+		assert.Equal(t, expectedValue, string(header.Value), "Header value mismatch")
+	}
+}

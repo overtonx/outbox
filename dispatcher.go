@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"sync"
 	"time"
 
@@ -114,7 +115,7 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 	}
 
 	if err := ensureOutboxTable(context.Background(), db); err != nil {
-		options.logger.Fatal("Failed to create outbox tables", zap.Error(err))
+		return nil, fmt.Errorf("failed to create outbox tables: %w", err)
 	}
 
 	eventProcessor := NewEventProcessor(

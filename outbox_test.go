@@ -22,3 +22,56 @@ func TestNewOutboxEvent(t *testing.T) {
 	require.Equal(t, string(jsonRaw), `{"name":"test name"}`)
 
 }
+
+func TestValidateOutboxEvent(t *testing.T) {
+	tests := []struct {
+		name    string
+		event   Event
+		wantErr bool
+	}{
+		{
+			name: "valid event",
+			event: Event{
+				AggregateType: "test",
+				AggregateID:   "1",
+				Topic:         "topic",
+			},
+			wantErr: false,
+		},
+		{
+			name: "missing aggregate_type",
+			event: Event{
+				AggregateID: "1",
+				Topic:       "topic",
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing aggregate_id",
+			event: Event{
+				AggregateType: "test",
+				Topic:         "topic",
+			},
+			wantErr: true,
+		},
+		{
+			name: "missing topic",
+			event: Event{
+				AggregateType: "test",
+				AggregateID:   "1",
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateOutboxEvent(tt.event)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}

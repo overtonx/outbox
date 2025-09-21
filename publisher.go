@@ -113,7 +113,10 @@ func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
 
 func (p *KafkaPublisher) Close() error {
 	p.logger.Info("Closing kafka producer")
-	p.producer.Flush(15 * 1000) // 15 sec
+	if _, err := p.producer.Flush(15 * 1000); err != nil { // 15 sec
+		p.logger.Error("Failed to flush kafka producer", zap.Error(err))
+		return fmt.Errorf("failed to flush kafka producer: %w", err)
+	}
 	p.producer.Close()
 	return nil
 }

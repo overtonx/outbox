@@ -15,6 +15,13 @@ var (
 	ErrEventAlreadyExists = errors.New("event already exists")
 )
 
+// DBExecutor defines the interface for executing database queries.
+// This allows for using either a *sql.DB or *sql.Tx.
+
+type DBExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
+}
+
 type Event struct {
 	EventID       string            `json:"event_id"`
 	EventType     string            `json:"event_type"`
@@ -43,20 +50,14 @@ func NewOutboxEvent(eventID, eventType, aggregateType, aggregateID, topic string
 	return event, nil
 }
 
-func SaveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
-	if err := validateOutboxEvent(event); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
-	}
+// injectTraceContext injects the tracing context from the context into the event headers.
+func injectTraceContext(ctx context.Context, event *Event) {
+	carrier := NewMessageCarrier(event)
+	otel.GetTextMapPropagator().Inject(ctx, carrier)
+}
 
-	carrie := NewMessageCarrier(&event)
-	otel.GetTextMapPropagator().Inject(ctx, carrie)
-
-	query := `
-		INSERT INTO outbox_events 
-		(event_id, event_type, aggregate_type, aggregate_id, topic, payload, headers, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
+// insertEvent marshals the event payload and headers and inserts the event into the database.
+func insertEvent(ctx context.Context, exec DBExecutor, event Event) error {
 	payloadJSON, err := json.Marshal(event.Payload)
 	if err != nil {
 		return fmt.Errorf("failed to marshal payload: %w", err)
@@ -70,7 +71,13 @@ func SaveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
 		}
 	}
 
-	_, err = tx.ExecContext(ctx, query,
+	query := `
+		INSERT INTO outbox_events 
+		(event_id, event_type, aggregate_type, aggregate_id, topic, payload, headers, status)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err = exec.ExecContext(ctx, query,
 		event.EventID,
 		event.EventType,
 		event.AggregateType,
@@ -81,7 +88,17 @@ func SaveEvent(ctx context.Context, tx *sql.Tx, event Event) error {
 		EventRecordStatusNew,
 	)
 
-	if err != nil {
+	return err
+}
+
+func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
+	if err := validateOutboxEvent(event); err != nil {
+		return fmt.Errorf("validation failed: %w", err)
+	}
+
+	injectTraceContext(ctx, &event)
+
+	if err := insertEvent(ctx, exec, event); err != nil {
 		return fmt.Errorf("failed to save outbox event: %w", convertFromDBError(err))
 	}
 
