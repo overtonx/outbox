@@ -2,126 +2,94 @@ package outbox
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
 	"go.uber.org/zap"
 )
 
-type CleanupServiceImpl struct {
-	db                  *sql.DB
-	logger              *zap.Logger
-	batchSize           int
-	deadLetterRetention time.Duration
-	sentEventsRetention time.Duration
-	metrics             MetricsCollector
-}
-
-func NewCleanupService(
-	db *sql.DB,
-	logger *zap.Logger,
-	batchSize int,
-	deadLetterRetention time.Duration,
-	sentEventsRetention time.Duration,
-	metrics MetricsCollector,
-) *CleanupServiceImpl {
-	if metrics == nil {
-		metrics = NewNoOpMetricsCollector()
+// Cleanup performs maintenance tasks on the outbox tables, such as deleting old
+// processed events and old dead-lettered events to prevent the tables from growing indefinitely.
+func (c *Carrier) Cleanup(ctx context.Context, opts ...CleanupServiceOption) error {
+	options := &cleanupServiceOptions{
+		batchSize:           defaultBatchSize,
+		sentRetention:       defaultSentEventsRetention,
+		deadLetterRetention: defaultDeadLetterRetention,
+	}
+	for _, opt := range opts {
+		opt(options)
 	}
 
-	return &CleanupServiceImpl{
-		db:                  db,
-		logger:              logger,
-		batchSize:           batchSize,
-		deadLetterRetention: deadLetterRetention,
-		sentEventsRetention: sentEventsRetention,
-		metrics:             metrics,
-	}
-}
-
-func (s *CleanupServiceImpl) Cleanup(ctx context.Context) error {
 	start := time.Now()
 	defer func() {
-		s.metrics.RecordDuration("cleanup.duration", time.Since(start), nil)
+		c.metrics.RecordDuration("cleanup.duration", time.Since(start), nil)
 	}()
 
-	deadLetterCount, err := s.cleanupDeadLetters(ctx)
+	sentEventsCleaned, err := c.cleanupSentEvents(ctx, options.sentRetention, options.batchSize)
 	if err != nil {
-		s.logger.Error("Failed to cleanup deadletters", zap.Error(err))
+		c.logger.Error("Failed to cleanup sent events", zap.Error(err))
+		// Continue to the next cleanup task even if this one fails
 	}
 
-	sentEventCount, err := s.cleanupSentEvents(ctx)
+	deadLettersCleaned, err := c.cleanupDeadLetters(ctx, options.deadLetterRetention, options.batchSize)
 	if err != nil {
-		s.logger.Error("Failed to cleanup sent events", zap.Error(err))
+		c.logger.Error("Failed to cleanup dead-letter events", zap.Error(err))
 	}
 
-	totalCleaned := deadLetterCount + sentEventCount
-	s.logger.Info("Cleanup completed",
-		zap.Int64("deadletters_cleaned", deadLetterCount),
-		zap.Int64("sent_events_cleaned", sentEventCount),
-		zap.Int64("total_cleaned", totalCleaned))
+	c.logger.Info("Cleanup process finished",
+		zap.Int64("sent_events_cleaned", sentEventsCleaned),
+		zap.Int64("dead_letters_cleaned", deadLettersCleaned),
+	)
+	c.metrics.IncrementCounter("cleanup.executed", nil)
 
-	s.metrics.IncrementCounter("cleanup.executed", map[string]string{"status": "success"})
-	s.metrics.RecordGauge("cleanup.deadletters_cleaned", float64(deadLetterCount), nil)
-	s.metrics.RecordGauge("cleanup.sent_events_cleaned", float64(sentEventCount), nil)
-
-	return nil
+	return nil // Return nil as we don't want to stop the worker for cleanup errors
 }
 
-func (s *CleanupServiceImpl) cleanupDeadLetters(ctx context.Context) (int64, error) {
-	cutoffTime := time.Now().Add(-s.deadLetterRetention)
+func (c *Carrier) cleanupSentEvents(ctx context.Context, retention time.Duration, batchSize int) (int64, error) {
+	cutoff := time.Now().UTC().Add(-retention)
+	query := `DELETE FROM outbox_events WHERE status = ? AND updated_at < ? LIMIT ?`
 
-	query := `
-		DELETE FROM outbox_deadletters 
-		WHERE created_at < ?
-		LIMIT ?
-	`
-
-	result, err := s.db.ExecContext(ctx, query, cutoffTime, s.batchSize)
+	result, err := c.db.ExecContext(ctx, query, EventStatusSent, cutoff, batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup deadletters: %w", err)
+		return 0, fmt.Errorf("failed to execute delete for sent events: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+		return 0, fmt.Errorf("failed to get rows affected for sent events: %w", err)
 	}
 
 	if rowsAffected > 0 {
-		s.logger.Info("Cleaned up old deadletters",
-			zap.Int64("deleted_count", rowsAffected),
-			zap.Time("cutoff_time", cutoffTime),
-			zap.Duration("retention_period", s.deadLetterRetention))
+		c.logger.Info("Cleaned up old sent events",
+			zap.Int64("count", rowsAffected),
+			zap.Duration("retention", retention),
+		)
+		c.metrics.RecordGauge("cleanup.sent_events_cleaned", float64(rowsAffected), nil)
 	}
 
 	return rowsAffected, nil
 }
 
-func (s *CleanupServiceImpl) cleanupSentEvents(ctx context.Context) (int64, error) {
-	cutoffTime := time.Now().Add(-s.sentEventsRetention)
+func (c *Carrier) cleanupDeadLetters(ctx context.Context, retention time.Duration, batchSize int) (int64, error) {
+	cutoff := time.Now().UTC().Add(-retention)
+	query := `DELETE FROM outbox_deadletters WHERE created_at < ? LIMIT ?`
 
-	query := `
-		DELETE FROM outbox_events 
-		WHERE status = ? AND created_at < ?
-		LIMIT ?
-	`
-
-	result, err := s.db.ExecContext(ctx, query, EventRecordStatusSent, cutoffTime, s.batchSize)
+	result, err := c.db.ExecContext(ctx, query, cutoff, batchSize)
 	if err != nil {
-		return 0, fmt.Errorf("failed to cleanup sent events: %w", err)
+		return 0, fmt.Errorf("failed to execute delete for dead-letters: %w", err)
 	}
 
 	rowsAffected, err := result.RowsAffected()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get rows affected: %w", err)
+		return 0, fmt.Errorf("failed to get rows affected for dead-letters: %w", err)
 	}
 
 	if rowsAffected > 0 {
-		s.logger.Info("Cleaned up old sent events",
-			zap.Int64("deleted_count", rowsAffected),
-			zap.Time("cutoff_time", cutoffTime),
-			zap.Duration("retention_period", s.sentEventsRetention))
+		c.logger.Info("Cleaned up old dead-letter events",
+			zap.Int64("count", rowsAffected),
+			zap.Duration("retention", retention),
+		)
+		c.metrics.RecordGauge("cleanup.deadletters_cleaned", float64(rowsAffected), nil)
 	}
 
 	return rowsAffected, nil

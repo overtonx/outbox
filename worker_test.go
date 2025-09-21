@@ -2,200 +2,128 @@ package outbox
 
 import (
 	"context"
-	"errors"
-	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
 
-func TestNewBaseWorker(t *testing.T) {
-	name := "test-worker"
-	interval := 100 * time.Millisecond
-	logger := zap.NewNop()
-	workFunc := func(ctx context.Context) error { return nil }
-
-	worker := NewBaseWorker(name, interval, logger, workFunc)
-
-	if worker == nil {
-		t.Fatal("Expected non-nil worker")
-	}
-
-	if worker.name != name {
-		t.Errorf("Expected name %s, got %s", name, worker.name)
-	}
-
-	if worker.interval != interval {
-		t.Errorf("Expected interval %v, got %v", interval, worker.interval)
-	}
-
-	if worker.logger != logger {
-		t.Error("Expected logger to match")
-	}
-
-	if worker.workFunc == nil {
-		t.Fatal("Expected non-nil workFunc")
-	}
-
-	if worker.stopChan == nil {
-		t.Fatal("Expected non-nil stopChan")
-	}
-
-	if worker.doneChan == nil {
-		t.Fatal("Expected non-nil doneChan")
-	}
-}
-
-func TestBaseWorkerName(t *testing.T) {
-	name := "test-worker"
-	worker := NewBaseWorker(name, 100*time.Millisecond, zap.NewNop(), func(ctx context.Context) error { return nil })
-
-	if worker.Name() != name {
-		t.Errorf("Expected name %s, got %s", name, worker.Name())
-	}
-}
-
-func TestBaseWorkerStartAndStop(t *testing.T) {
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), func(ctx context.Context) error { return nil })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		worker.Start(ctx)
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-	worker.Stop()
-	wg.Wait()
-}
-
-func TestBaseWorkerWorkFunctionCalled(t *testing.T) {
-	callCount := 0
+func TestBaseWorker_StartAndStop(t *testing.T) {
+	workDone := make(chan bool)
 	workFunc := func(ctx context.Context) error {
-		callCount++
+		workDone <- true
 		return nil
 	}
 
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), workFunc)
+	worker := NewBaseWorker("test-worker", 20*time.Millisecond, zap.NewNop(), workFunc)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	go worker.Start(ctx)
 
-	go func() {
-		defer wg.Done()
-		worker.Start(ctx)
-	}()
+	// Wait for the worker to do some work
+	<-workDone
 
-	time.Sleep(100 * time.Millisecond)
+	// Stop the worker and it should block until shutdown is complete
 	worker.Stop()
-	wg.Wait()
 
-	if callCount == 0 {
-		t.Error("Expected workFunc to be called at least once")
+	// Assert that another piece of work is not done after stopping
+	select {
+	case <-workDone:
+		t.Fatal("work should not have been done after worker was stopped")
+	case <-time.After(50 * time.Millisecond):
+		// This is expected
 	}
 }
 
-func TestBaseWorkerWorkFunctionError(t *testing.T) {
+func TestBaseWorker_ContextCancellation(t *testing.T) {
+	var workCounter int32
 	workFunc := func(ctx context.Context) error {
-		return errors.New("work function error")
+		atomic.AddInt32(&workCounter, 1)
+		return nil
 	}
 
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), workFunc)
+	worker := NewBaseWorker("test-worker", 20*time.Millisecond, zap.NewNop(), workFunc)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	// Context will be cancelled after 50ms
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	// Start blocks until the worker is stopped
+	worker.Start(ctx)
 
-	go func() {
-		defer wg.Done()
-		worker.Start(ctx)
-	}()
+	// After Start() returns, no more work should be done.
+	// We read the value once.
+	countAfterStop := atomic.LoadInt32(&workCounter)
+	assert.Greater(t, countAfterStop, int32(0), "worker should have done some work")
 
-	time.Sleep(75 * time.Millisecond)
-	worker.Stop()
-	wg.Wait()
+	// Wait a bit to ensure no more work is being done
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, countAfterStop, atomic.LoadInt32(&workCounter), "work should not be done after context is cancelled")
 }
 
-func TestBaseWorkerContextCancellation(t *testing.T) {
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), func(ctx context.Context) error { return nil })
+func TestBaseWorker_StopIsIdempotent(t *testing.T) {
+	workDone := make(chan bool)
+	workFunc := func(ctx context.Context) error {
+		workDone <- true
+		return nil
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	worker := NewBaseWorker("test-worker", 20*time.Millisecond, zap.NewNop(), workFunc)
+
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var wg sync.WaitGroup
-	wg.Add(1)
+	go worker.Start(ctx)
+	<-workDone
 
-	go func() {
-		defer wg.Done()
-		worker.Start(ctx)
-	}()
-
-	wg.Wait()
-}
-
-func TestBaseWorkerStopBeforeStart(t *testing.T) {
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), func(ctx context.Context) error { return nil })
-
-	worker.Stop()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		worker.Start(ctx)
-	}()
-
-	wg.Wait()
-}
-
-func TestBaseWorkerMultipleStops(t *testing.T) {
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), func(ctx context.Context) error { return nil })
-
+	// Call stop multiple times, it should not panic
 	worker.Stop()
 	worker.Stop()
-	worker.Stop()
-}
 
-func TestBaseWorkerConcurrentAccess(t *testing.T) {
-	worker := NewBaseWorker("test-worker", 50*time.Millisecond, zap.NewNop(), func(ctx context.Context) error { return nil })
-
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-
-	var wg sync.WaitGroup
-	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		worker.Start(ctx)
-	}()
-
-	go func() {
-		defer wg.Done()
-		time.Sleep(50 * time.Millisecond)
+	assert.NotPanics(t, func() {
 		worker.Stop()
-	}()
+	})
+}
 
-	go func() {
-		defer wg.Done()
+func TestBaseWorker_StopWaitsForWorkToFinish(t *testing.T) {
+	workStarted := make(chan bool, 1)
+	workFinished := make(chan bool, 1)
+
+	workFunc := func(ctx context.Context) error {
+		workStarted <- true
+		// Simulate a long-running task
 		time.Sleep(100 * time.Millisecond)
-		worker.Name()
-	}()
+		workFinished <- true
+		return nil
+	}
 
-	wg.Wait()
+	worker := NewBaseWorker("test-worker", 20*time.Millisecond, zap.NewNop(), workFunc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go worker.Start(ctx)
+
+	// Wait for a piece of work to start
+	<-workStarted
+
+	// Call stop. This should block until the long-running task is complete.
+	stopCalledTime := time.Now()
+	worker.Stop()
+	stopFinishedTime := time.Now()
+
+	// Check if stop actually blocked
+	assert.True(t, stopFinishedTime.Sub(stopCalledTime) >= 100*time.Millisecond)
+
+	// Check that the work was actually finished
+	select {
+	case <-workFinished:
+		// success
+	default:
+		t.Fatal("work should have been finished")
+	}
 }

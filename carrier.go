@@ -1,40 +1,37 @@
 package outbox
 
-import "go.opentelemetry.io/otel/propagation"
+import (
+	"database/sql"
 
-var _ propagation.TextMapCarrier = &MessageCarrier{}
+	"go.uber.org/zap"
+)
 
-// MessageCarrier implements propagation.TextMapCarrier.
-// It is used to extract trace context from a message's headers.
-type MessageCarrier struct {
-	event *Event
+// Carrier holds the shared dependencies for the outbox services.
+// It acts as a dependency injection container for the various processors.
+type Carrier struct {
+	db        *sql.DB
+	publisher Publisher
+	metrics   MetricsCollector
+	logger    *zap.Logger
 }
 
-// NewMessageCarrier creates a new MessageCarrier.
-func NewMessageCarrier(event *Event) *MessageCarrier {
-	return &MessageCarrier{event: event}
-}
-
-// Get returns the value associated with the given key.
-func (mc *MessageCarrier) Get(key string) string {
-	for k, v := range mc.event.Headers {
-		if k == key {
-			return v
-		}
+// NewCarrier creates a new Carrier with the given options.
+// The carrier is responsible for holding shared resources like the database connection,
+// publisher, logger, and metrics collector.
+func NewCarrier(db *sql.DB, opts ...CarrierOption) (*Carrier, error) {
+	c := &Carrier{
+		db:      db,
+		logger:  zap.NewNop(),
+		metrics: NewNopMetricsCollector(),
 	}
-	return ""
-}
 
-// Set sets the value associated with the given key.
-func (mc *MessageCarrier) Set(key string, value string) {
-	mc.event.Headers[key] = value
-}
-
-// Keys returns a slice of all keys in the carrier.
-func (mc *MessageCarrier) Keys() []string {
-	keys := make([]string, 0, len(mc.event.Headers))
-	for k, _ := range mc.event.Headers {
-		keys = append(keys, k)
+	for _, opt := range opts {
+		opt(c)
 	}
-	return keys
+
+	if c.publisher == nil {
+		c.publisher = NewNopPublisher()
+	}
+
+	return c, nil
 }

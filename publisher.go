@@ -10,91 +10,76 @@ import (
 	"go.uber.org/zap"
 )
 
-type NopPublisher struct {
-	logger *zap.Logger
+// KafkaHeaderBuilder defines a function type for building Kafka message headers from an EventRecord.
+type KafkaHeaderBuilder func(record EventRecord) []kafka.Header
+
+// NopPublisher is a publisher that does nothing. Useful for testing.
+type NopPublisher struct{}
+
+// NewNopPublisher creates a new NopPublisher.
+func NewNopPublisher() *NopPublisher {
+	return &NopPublisher{}
 }
 
-func NewDefaultPublisher(logger *zap.Logger) *NopPublisher {
-	return &NopPublisher{
-		logger: logger,
-	}
-}
-
+// Publish implements the Publisher interface.
 func (p *NopPublisher) Publish(_ context.Context, _ EventRecord) error {
 	return nil
 }
 
+// Close implements the Publisher interface.
 func (p *NopPublisher) Close() error {
 	return nil
 }
 
+// KafkaPublisher sends events to a Kafka topic.
 type KafkaPublisher struct {
-	logger   *zap.Logger
-	producer *kafka.Producer
-	config   KafkaConfig
+	logger        *zap.Logger
+	producer      *kafka.Producer
+	producerProps kafka.ConfigMap
+	defaultTopic  string
+	headerBuilder KafkaHeaderBuilder
 }
 
-// KafkaHeaderBuilder defines a function type for building Kafka message headers from an EventRecord.
-type KafkaHeaderBuilder func(record EventRecord) []kafka.Header
-
-type KafkaConfig struct {
-	Topic         string
-	ProducerProps kafka.ConfigMap
-	HeaderBuilder KafkaHeaderBuilder
-}
-
-func DefaultKafkaConfig() KafkaConfig {
-	return KafkaConfig{
-		Topic: "outbox-events",
-		ProducerProps: kafka.ConfigMap{
-			"bootstrap.servers":  "localhost:9092",
+// NewKafkaPublisher creates a new KafkaPublisher with functional options.
+func NewKafkaPublisher(logger *zap.Logger, opts ...KafkaPublisherOption) (*KafkaPublisher, error) {
+	p := &KafkaPublisher{
+		logger: logger,
+		producerProps: kafka.ConfigMap{
+			// Default producer properties
 			"acks":               "all",
 			"retries":            3,
 			"linger.ms":          10,
 			"enable.idempotence": true,
 			"compression.type":   "snappy",
 		},
-		HeaderBuilder: buildKafkaHeaders,
+		defaultTopic:  "outbox-events",
+		headerBuilder: buildKafkaHeaders,
 	}
-}
 
-func NewKafkaPublisher(logger *zap.Logger) (*KafkaPublisher, error) {
-	config := DefaultKafkaConfig()
-	return NewKafkaPublisherWithConfig(logger, config)
-}
+	for _, opt := range opts {
+		opt(p)
+	}
 
-func NewKafkaPublisherWithConfig(logger *zap.Logger, config KafkaConfig) (*KafkaPublisher, error) {
-	producer, err := kafka.NewProducer(&config.ProducerProps)
+	producer, err := kafka.NewProducer(&p.producerProps)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kafka producer: %w", err)
 	}
-
-	if config.HeaderBuilder == nil {
-		config.HeaderBuilder = buildKafkaHeaders
-	}
-
-	return NewKafkaPublisherFromProducer(logger, producer, config), nil
-}
-
-func NewKafkaPublisherFromProducer(logger *zap.Logger, producer *kafka.Producer, config KafkaConfig) *KafkaPublisher {
-	p := &KafkaPublisher{
-		logger:   logger,
-		producer: producer,
-		config:   config,
-	}
+	p.producer = producer
 
 	go p.handleDeliveryReports()
 
-	return p
+	return p, nil
 }
 
+// Publish sends an event to the configured Kafka topic.
+// The topic is determined by the event's Topic field, falling back to the default topic.
 func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
 	topic := event.Topic
 	if topic == "" {
-		topic = p.config.Topic
+		topic = p.defaultTopic
 	}
 
-	p.logger.Info("Publishing event to Kafka",
+	p.logger.Debug("Publishing event to Kafka",
 		zap.String("event_id", event.EventID),
 		zap.String("event_type", event.EventType),
 		zap.String("topic", topic),
@@ -104,13 +89,14 @@ func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
 		TopicPartition: kafka.TopicPartition{Topic: &topic, Partition: kafka.PartitionAny},
 		Key:            []byte(event.AggregateID),
 		Value:          event.Payload,
-		Headers:        p.config.HeaderBuilder(event),
+		Headers:        p.headerBuilder(event),
 		Timestamp:      time.Now(),
 	}
 
 	return p.producer.Produce(message, nil)
 }
 
+// Close flushes the producer and closes the Kafka connection.
 func (p *KafkaPublisher) Close() error {
 	p.logger.Info("Closing kafka producer")
 	p.producer.Flush(15 * 1000) // 15 sec
@@ -118,6 +104,7 @@ func (p *KafkaPublisher) Close() error {
 	return nil
 }
 
+// handleDeliveryReports consumes delivery reports from the producer's events channel.
 func (p *KafkaPublisher) handleDeliveryReports() {
 	for e := range p.producer.Events() {
 		switch ev := e.(type) {
@@ -127,21 +114,14 @@ func (p *KafkaPublisher) handleDeliveryReports() {
 					zap.String("topic", *ev.TopicPartition.Topic),
 					zap.Error(ev.TopicPartition.Error),
 				)
-			} else {
-				p.logger.Debug("Successfully delivered message",
-					zap.String("topic", *ev.TopicPartition.Topic),
-					zap.Int32("partition", ev.TopicPartition.Partition),
-					zap.Any("offset", ev.TopicPartition.Offset),
-				)
 			}
 		case kafka.Error:
 			p.logger.Error("Kafka error", zap.Error(ev))
-		default:
-			p.logger.Debug("Ignored kafka event", zap.Any("event", ev))
 		}
 	}
 }
 
+// buildKafkaHeaders is the default function for creating Kafka headers from an event.
 func buildKafkaHeaders(event EventRecord) []kafka.Header {
 	headers := []kafka.Header{
 		{Key: "event_id", Value: []byte(event.EventID)},

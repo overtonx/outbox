@@ -3,122 +3,179 @@ package outbox
 import (
 	"time"
 
+	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
 )
 
-type DispatcherOption func(*dispatcherOptions) error
+const (
+	defaultBatchSize         = 100
+	defaultMaxAttempts       = 3
+	defaultBaseDelay         = 1 * time.Minute
+	defaultMaxDelay          = 30 * time.Minute
+	defaultStuckEventTimeout = 10 * time.Minute
+	defaultSentEventsRetention = 24 * time.Hour
+	defaultDeadLetterRetention = 7 * 24 * time.Hour
+)
 
-type dispatcherOptions struct {
-	batchSize               int
-	pollInterval            time.Duration
-	maxAttempts             int
-	deadLetterInterval      time.Duration
-	stuckEventTimeout       time.Duration
-	stuckEventCheckInterval time.Duration
-	deadLetterRetention     time.Duration
-	sentEventsRetention     time.Duration
-	cleanupInterval         time.Duration
-	backoffStrategy         BackoffStrategy
-	publisher               Publisher
-	metrics                 MetricsCollector
-	logger                  *zap.Logger
-}
+//
+// Carrier Options
+//
 
-func WithBatchSize(size int) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.batchSize = size
-		return nil
+type CarrierOption func(*Carrier)
+
+func WithLogger(logger *zap.Logger) CarrierOption {
+	return func(c *Carrier) {
+		c.logger = logger
 	}
 }
 
-func WithPollInterval(interval time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.pollInterval = interval
-		return nil
+func WithMetrics(metrics MetricsCollector) CarrierOption {
+	return func(c *Carrier) {
+		c.metrics = metrics
 	}
 }
 
-func WithMaxAttempts(attempts int) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.maxAttempts = attempts
-		return nil
+func WithPublisher(publisher Publisher) CarrierOption {
+	return func(c *Carrier) {
+		c.publisher = publisher
 	}
 }
 
-func WithDeadLetterInterval(interval time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.deadLetterInterval = interval
-		return nil
+//
+// KafkaPublisher Options
+//
+
+type KafkaPublisherOption func(*KafkaPublisher)
+
+func WithKafkaProducerProps(props kafka.ConfigMap) KafkaPublisherOption {
+	return func(p *KafkaPublisher) {
+		for k, v := range props {
+			p.producerProps[k] = v
+		}
 	}
 }
 
-func WithStuckEventTimeout(timeout time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.stuckEventTimeout = timeout
-		return nil
+func WithKafkaDefaultTopic(topic string) KafkaPublisherOption {
+	return func(p *KafkaPublisher) {
+		p.defaultTopic = topic
 	}
 }
 
-func WithStuckEventCheckInterval(interval time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.stuckEventCheckInterval = interval
-		return nil
+func WithKafkaHeaderBuilder(builder KafkaHeaderBuilder) KafkaPublisherOption {
+	return func(p *KafkaPublisher) {
+		p.headerBuilder = builder
 	}
 }
 
-func WithDeadLetterRetention(retention time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.deadLetterRetention = retention
-		return nil
+//
+// EventProcessor Options
+//
+
+type EventProcessorOption func(*eventProcessorOptions)
+
+type eventProcessorOptions struct {
+	batchSize       int
+	maxAttempts     int
+	backoffStrategy BackoffStrategy
+}
+
+func WithEventProcessorBatchSize(size int) EventProcessorOption {
+	return func(o *eventProcessorOptions) {
+		o.batchSize = size
 	}
 }
 
-func WithSentEventsRetention(retention time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.sentEventsRetention = retention
-		return nil
+func WithEventProcessorMaxAttempts(attempts int) EventProcessorOption {
+	return func(o *eventProcessorOptions) {
+		o.maxAttempts = attempts
 	}
 }
 
-func WithCleanupInterval(interval time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.cleanupInterval = interval
-		return nil
+func WithEventProcessorBackoffStrategy(strategy BackoffStrategy) EventProcessorOption {
+	return func(o *eventProcessorOptions) {
+		o.backoffStrategy = strategy
 	}
 }
 
-func WithBackoffStrategy(strategy BackoffStrategy) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.backoffStrategy = strategy
-		return nil
+//
+// DeadLetterService Options
+//
+
+type DeadLetterServiceOption func(*deadLetterServiceOptions)
+
+type deadLetterServiceOptions struct {
+	batchSize int
+}
+
+func WithDeadLetterServiceBatchSize(size int) DeadLetterServiceOption {
+	return func(o *deadLetterServiceOptions) {
+		o.batchSize = size
 	}
 }
 
-func WithPublisher(publisher Publisher) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.publisher = publisher
-		return nil
+//
+// StuckEventService Options
+//
+
+type StuckEventServiceOption func(*stuckEventServiceOptions)
+
+type stuckEventServiceOptions struct {
+	batchSize       int
+	maxAttempts     int
+	stuckTimeout    time.Duration
+	backoffStrategy BackoffStrategy
+}
+
+func WithStuckEventServiceBatchSize(size int) StuckEventServiceOption {
+	return func(o *stuckEventServiceOptions) {
+		o.batchSize = size
 	}
 }
 
-func WithMetrics(metrics MetricsCollector) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.metrics = metrics
-		return nil
+func WithStuckEventServiceMaxAttempts(attempts int) StuckEventServiceOption {
+	return func(o *stuckEventServiceOptions) {
+		o.maxAttempts = attempts
 	}
 }
 
-func WithLogger(logger *zap.Logger) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.logger = logger
-		return nil
+func WithStuckEventServiceStuckTimeout(timeout time.Duration) StuckEventServiceOption {
+	return func(o *stuckEventServiceOptions) {
+		o.stuckTimeout = timeout
 	}
 }
 
-func WithKafkaConfig(config KafkaConfig) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		var err error
-		opts.publisher, err = NewKafkaPublisherWithConfig(opts.logger, config)
-		return err
+func WithStuckEventServiceBackoffStrategy(strategy BackoffStrategy) StuckEventServiceOption {
+	return func(o *stuckEventServiceOptions) {
+		o.backoffStrategy = strategy
+	}
+}
+
+//
+// CleanupService Options
+//
+
+type CleanupServiceOption func(*cleanupServiceOptions)
+
+type cleanupServiceOptions struct {
+	batchSize           int
+	sentRetention       time.Duration
+	deadLetterRetention time.Duration
+}
+
+func WithCleanupServiceBatchSize(size int) CleanupServiceOption {
+	return func(o *cleanupServiceOptions) {
+		o.batchSize = size
+	}
+}
+
+func WithCleanupServiceSentRetention(retention time.Duration) CleanupServiceOption {
+	return func(o *cleanupServiceOptions) {
+		o.sentRetention = retention
+	}
+}
+
+func WithCleanupServiceDeadLetterRetention(retention time.Duration) CleanupServiceOption {
+	return func(o *cleanupServiceOptions) {
+		o.deadLetterRetention = retention
 	}
 }

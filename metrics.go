@@ -9,54 +9,39 @@ import (
 	"go.opentelemetry.io/otel/metric"
 )
 
-type NoOpMetricsCollector struct{}
+// NopMetricsCollector is a metrics collector that does nothing.
+// It is used as a default when no other collector is provided.
+type NopMetricsCollector struct{}
 
-func NewNoOpMetricsCollector() *NoOpMetricsCollector {
-	return &NoOpMetricsCollector{}
+// NewNopMetricsCollector creates a new NopMetricsCollector.
+func NewNopMetricsCollector() *NopMetricsCollector {
+	return &NopMetricsCollector{}
 }
 
-func (m *NoOpMetricsCollector) IncrementCounter(name string, tags map[string]string) {}
+// IncrementCounter implements the MetricsCollector interface.
+func (m *NopMetricsCollector) IncrementCounter(name string, tags map[string]string) {}
 
-func (m *NoOpMetricsCollector) RecordDuration(name string, duration time.Duration, tags map[string]string) {
+// RecordDuration implements the MetricsCollector interface.
+func (m *NopMetricsCollector) RecordDuration(name string, duration time.Duration, tags map[string]string) {
 }
 
-func (m *NoOpMetricsCollector) RecordGauge(name string, value float64, tags map[string]string) {}
+// RecordGauge implements the MetricsCollector interface.
+func (m *NopMetricsCollector) RecordGauge(name string, value float64, tags map[string]string) {}
 
-type PrometheusMetricsCollector struct {
-}
-
-func NewPrometheusMetricsCollector() *PrometheusMetricsCollector {
-	return &PrometheusMetricsCollector{}
-}
-
-func (m *PrometheusMetricsCollector) IncrementCounter(name string, tags map[string]string) {
-}
-
-func (m *PrometheusMetricsCollector) RecordDuration(name string, duration time.Duration, tags map[string]string) {
-}
-
-func (m *PrometheusMetricsCollector) RecordGauge(name string, value float64, tags map[string]string) {
-}
-
+// OpenTelemetryMetricsCollector is a metrics collector that uses the OpenTelemetry SDK.
 type OpenTelemetryMetricsCollector struct {
-	meter metric.Meter
-
+	meter      metric.Meter
 	counters   map[string]metric.Int64Counter
 	histograms map[string]metric.Float64Histogram
 	gauges     map[string]metric.Float64UpDownCounter
 }
 
+// NewOpenTelemetryMetricsCollector creates a new OpenTelemetryMetricsCollector with the default meter.
 func NewOpenTelemetryMetricsCollector() *OpenTelemetryMetricsCollector {
-	meter := otel.Meter("outbox")
-
-	return &OpenTelemetryMetricsCollector{
-		meter:      meter,
-		counters:   make(map[string]metric.Int64Counter),
-		histograms: make(map[string]metric.Float64Histogram),
-		gauges:     make(map[string]metric.Float64UpDownCounter),
-	}
+	return NewOpenTelemetryMetricsCollectorWithMeter(otel.Meter("outbox"))
 }
 
+// NewOpenTelemetryMetricsCollectorWithMeter creates a new OpenTelemetryMetricsCollector with a specific meter.
 func NewOpenTelemetryMetricsCollectorWithMeter(meter metric.Meter) *OpenTelemetryMetricsCollector {
 	return &OpenTelemetryMetricsCollector{
 		meter:      meter,
@@ -66,32 +51,35 @@ func NewOpenTelemetryMetricsCollectorWithMeter(meter metric.Meter) *OpenTelemetr
 	}
 }
 
+// IncrementCounter implements the MetricsCollector interface using OpenTelemetry.
 func (m *OpenTelemetryMetricsCollector) IncrementCounter(name string, tags map[string]string) {
 	counter, err := m.getOrCreateCounter(name)
 	if err != nil {
-		return // Игнорируем ошибки для простоты
+		return // Ignore errors for simplicity
 	}
-
 	attrs := m.convertTagsToAttributes(tags)
 	counter.Add(context.Background(), 1, metric.WithAttributes(attrs...))
 }
 
+// RecordDuration implements the MetricsCollector interface using OpenTelemetry.
 func (m *OpenTelemetryMetricsCollector) RecordDuration(name string, duration time.Duration, tags map[string]string) {
 	histogram, err := m.getOrCreateHistogram(name)
 	if err != nil {
-		return // Игнорируем ошибки для простоты
+		return // Ignore errors for simplicity
 	}
-
 	attrs := m.convertTagsToAttributes(tags)
-	histogram.Record(context.Background(), float64(duration.Nanoseconds())/1e9, metric.WithAttributes(attrs...))
+	histogram.Record(context.Background(), duration.Seconds(), metric.WithAttributes(attrs...))
 }
 
+// RecordGauge implements the MetricsCollector interface using OpenTelemetry.
 func (m *OpenTelemetryMetricsCollector) RecordGauge(name string, value float64, tags map[string]string) {
+	// Note: OpenTelemetry gauges are tricky. An UpDownCounter is more like a delta.
+	// For a true gauge, you would use an async gauge, which is more complex.
+	// This implementation is a simplification.
 	gauge, err := m.getOrCreateGauge(name)
 	if err != nil {
-		return // Игнорируем ошибки для простоты
+		return // Ignore errors for simplicity
 	}
-
 	attrs := m.convertTagsToAttributes(tags)
 	gauge.Add(context.Background(), value, metric.WithAttributes(attrs...))
 }
@@ -100,16 +88,10 @@ func (m *OpenTelemetryMetricsCollector) getOrCreateCounter(name string) (metric.
 	if counter, exists := m.counters[name]; exists {
 		return counter, nil
 	}
-
-	counter, err := m.meter.Int64Counter(
-		name,
-		metric.WithDescription("Counter for "+name),
-		metric.WithUnit("1"),
-	)
+	counter, err := m.meter.Int64Counter(name)
 	if err != nil {
 		return nil, err
 	}
-
 	m.counters[name] = counter
 	return counter, nil
 }
@@ -118,16 +100,10 @@ func (m *OpenTelemetryMetricsCollector) getOrCreateHistogram(name string) (metri
 	if histogram, exists := m.histograms[name]; exists {
 		return histogram, nil
 	}
-
-	histogram, err := m.meter.Float64Histogram(
-		name,
-		metric.WithDescription("Histogram for "+name),
-		metric.WithUnit("s"),
-	)
+	histogram, err := m.meter.Float64Histogram(name, metric.WithUnit("s"))
 	if err != nil {
 		return nil, err
 	}
-
 	m.histograms[name] = histogram
 	return histogram, nil
 }
@@ -136,16 +112,10 @@ func (m *OpenTelemetryMetricsCollector) getOrCreateGauge(name string) (metric.Fl
 	if gauge, exists := m.gauges[name]; exists {
 		return gauge, nil
 	}
-
-	gauge, err := m.meter.Float64UpDownCounter(
-		name,
-		metric.WithDescription("Gauge for "+name),
-		metric.WithUnit("1"),
-	)
+	gauge, err := m.meter.Float64UpDownCounter(name)
 	if err != nil {
 		return nil, err
 	}
-
 	m.gauges[name] = gauge
 	return gauge, nil
 }
