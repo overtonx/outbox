@@ -125,3 +125,21 @@ kafkaConfig := outbox.KafkaConfig{
     ```
 
 Такой подход обеспечивает гибкость: вы можете как направлять все события в один общий топик, так и маршрутизировать их по разным топикам в зависимости от бизнес-логики.
+
+## Миграция с v1 на v2
+
+В версии v2 изменилась схема таблицы `outbox_events` и `outbox_deadletters`. Поля `trace_id` и `span_id` были заменены одним универсальным полем `headers` типа `JSON` для большей гибкости при хранении метаданных.
+
+Для ручного обновления схемы базы данных (на примере MySQL) выполните следующие запросы:
+
+1.  **Добавьте колонки `headers`:**
+    ```sql
+    ALTER TABLE outbox_events ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
+    ALTER TABLE outbox_deadletters ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
+    ```
+
+2.  **Удалите старые колонки:**
+    ```sql
+    ALTER TABLE outbox_events DROP COLUMN trace_id, DROP COLUMN span_id;
+    ALTER TABLE outbox_deadletters DROP COLUMN trace_id, DROP COLUMN span_id;
+    ```
