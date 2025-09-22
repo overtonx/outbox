@@ -7,6 +7,8 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/embedded"
 )
 
 func TestNewDefaultPublisher(t *testing.T) {
@@ -19,7 +21,7 @@ func TestNewDefaultPublisher(t *testing.T) {
 
 func TestDefaultPublisherPublish(t *testing.T) {
 	publisher := NewDefaultPublisher(zap.NewNop())
-	event := EventRecord{
+	event := embedded.EventRecord{
 		EventID: "test-event-id",
 	}
 
@@ -90,7 +92,7 @@ func TestBuildKafkaHeaders(t *testing.T) {
 	assert.NoError(t, err)
 	defer publisher.Close()
 
-	event := EventRecord{
+	event := embedded.EventRecord{
 		EventID:       "test-event-id",
 		EventType:     "test-event-type",
 		AggregateType: "test-aggregate-type",
@@ -120,7 +122,7 @@ func TestBuildKafkaHeadersWithoutTraceInfo(t *testing.T) {
 	assert.NoError(t, err)
 	defer publisher.Close()
 
-	event := EventRecord{
+	event := embedded.EventRecord{
 		EventID:       "test-event-id",
 		EventType:     "test-event-type",
 		AggregateType: "test-aggregate-type",
@@ -150,7 +152,7 @@ func TestBuildKafkaHeadersWithCustomHeaders(t *testing.T) {
 	assert.NoError(t, err)
 	defer publisher.Close()
 
-	event := EventRecord{
+	event := embedded.EventRecord{
 		EventID:       "test-event-id",
 		EventType:     "test-event-type",
 		AggregateType: "test-aggregate-type",

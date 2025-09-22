@@ -4,6 +4,9 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/backoff"
+	"github.com/overtonx/outbox/v2/embedded"
 )
 
 type DispatcherOption func(*dispatcherOptions) error
@@ -18,9 +21,9 @@ type dispatcherOptions struct {
 	deadLetterRetention     time.Duration
 	sentEventsRetention     time.Duration
 	cleanupInterval         time.Duration
-	backoffStrategy         BackoffStrategy
-	publisher               Publisher
-	metrics                 MetricsCollector
+	backoffStrategy         backoff.BackoffStrategy
+	publisher               embedded.Publisher
+	metrics                 embedded.MetricsCollector
 	logger                  *zap.Logger
 }
 
@@ -87,21 +90,21 @@ func WithCleanupInterval(interval time.Duration) DispatcherOption {
 	}
 }
 
-func WithBackoffStrategy(strategy BackoffStrategy) DispatcherOption {
+func WithBackoffStrategy(strategy backoff.BackoffStrategy) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		opts.backoffStrategy = strategy
 		return nil
 	}
 }
 
-func WithPublisher(publisher Publisher) DispatcherOption {
+func WithPublisher(publisher embedded.Publisher) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		opts.publisher = publisher
 		return nil
 	}
 }
 
-func WithMetrics(metrics MetricsCollector) DispatcherOption {
+func WithMetrics(metrics embedded.MetricsCollector) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		opts.metrics = metrics
 		return nil

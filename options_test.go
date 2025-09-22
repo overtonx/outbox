@@ -7,6 +7,9 @@ import (
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/backoff"
+	"github.com/overtonx/outbox/v2/internal/metric"
 )
 
 func TestWithBatchSize(t *testing.T) {
@@ -81,7 +84,7 @@ func TestWithCleanupInterval(t *testing.T) {
 
 func TestWithBackoffStrategy(t *testing.T) {
 	opts := &dispatcherOptions{}
-	strategy := NewFixedBackoffStrategy(1 * time.Second)
+	strategy := backoff.NewFixedBackoffStrategy(1 * time.Second)
 	err := WithBackoffStrategy(strategy)(opts)
 	assert.NoError(t, err)
 	assert.Equal(t, strategy, opts.backoffStrategy)
@@ -98,7 +101,7 @@ func TestWithPublisher(t *testing.T) {
 
 func TestWithMetrics(t *testing.T) {
 	opts := &dispatcherOptions{}
-	metrics := NewNoOpMetricsCollector()
+	metrics := metric.NewNoOpMetricsCollector()
 	err := WithMetrics(metrics)(opts)
 	assert.NoError(t, err)
 	assert.Equal(t, metrics, opts.metrics)
@@ -134,8 +137,8 @@ func TestWithKafkaConfig(t *testing.T) {
 func TestMultipleOptions(t *testing.T) {
 	opts := &dispatcherOptions{}
 	logger := zap.NewNop()
-	metrics := NewNoOpMetricsCollector()
-	strategy := NewFixedBackoffStrategy(1 * time.Second)
+	metrics := metric.NewNoOpMetricsCollector()
+	strategy := backoff.NewFixedBackoffStrategy(1 * time.Second)
 
 	err := WithBatchSize(25)(opts)
 	assert.NoError(t, err)

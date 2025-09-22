@@ -1,4 +1,4 @@
-package outbox
+package utils
 
 import (
 	"database/sql"
@@ -23,13 +23,13 @@ func TestPlaceholders(t *testing.T) {
 	}{
 		{"zero count", 0, ""},
 		{"single placeholder", 1, "?"},
-		{"multiple placeholders", 3, "?,?,?"},
-		{"many placeholders", 5, "?,?,?,?,?"},
+		{"multiple Placeholders", 3, "?,?,?"},
+		{"many Placeholders", 5, "?,?,?,?,?"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := placeholders(tt.count)
+			result := Placeholders(tt.count)
 			if result != tt.expected {
 				t.Errorf("Expected %q, got %q", tt.expected, result)
 			}
@@ -50,7 +50,7 @@ func TestNullString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := nullString(tt.input)
+			result := NullString(tt.input)
 			if result.String != tt.expected.String {
 				t.Errorf("Expected String %q, got %q", tt.expected.String, result.String)
 			}

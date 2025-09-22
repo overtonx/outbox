@@ -1,4 +1,4 @@
-package outbox
+package processor
 
 import (
 	"context"
@@ -7,18 +7,22 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/embedded"
+	"github.com/overtonx/outbox/v2/internal/metric"
+	"github.com/overtonx/outbox/v2/internal/utils"
 )
 
 type DeadLetterServiceImpl struct {
 	db        *sql.DB
 	logger    *zap.Logger
 	batchSize int
-	metrics   MetricsCollector
+	metrics   embedded.MetricsCollector
 }
 
-func NewDeadLetterService(db *sql.DB, logger *zap.Logger, batchSize int, metrics MetricsCollector) *DeadLetterServiceImpl {
+func NewDeadLetterService(db *sql.DB, logger *zap.Logger, batchSize int, metrics embedded.MetricsCollector) *DeadLetterServiceImpl {
 	if metrics == nil {
-		metrics = NewNoOpMetricsCollector()
+		metrics = metric.NewNoOpMetricsCollector()
 	}
 
 	return &DeadLetterServiceImpl{
@@ -52,17 +56,17 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 		FOR UPDATE SKIP LOCKED
 	`
 
-	rows, err := tx.QueryContext(ctx, query, EventRecordStatusError, s.batchSize)
+	rows, err := tx.QueryContext(ctx, query, embedded.EventRecordStatusError, s.batchSize)
 	if err != nil {
 		return fmt.Errorf("failed to query error events: %w", err)
 	}
 	defer rows.Close()
 
-	var eventsToMove []DeadLetterRecord
+	var eventsToMove []embedded.DeadLetterRecord
 	var eventIDs []int64
 
 	for rows.Next() {
-		var event DeadLetterRecord
+		var event embedded.DeadLetterRecord
 		var lastError sql.NullString
 
 		err := rows.Scan(
@@ -114,7 +118,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 			event.Payload,
 			event.Headers,
 			event.AttemptCount,
-			nullString(event.LastError),
+			utils.NullString(event.LastError),
 			event.CreatedAt,
 		)
 		if err != nil {
@@ -129,7 +133,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 	if len(eventIDs) > 0 {
 		deleteQuery := fmt.Sprintf(
 			"DELETE FROM outbox_events WHERE id IN (%s)",
-			placeholders(len(eventIDs)),
+			utils.Placeholders(len(eventIDs)),
 		)
 
 		args := make([]interface{}, len(eventIDs))

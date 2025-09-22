@@ -1,4 +1,4 @@
-package outbox
+package processor
 
 import (
 	"context"
@@ -7,29 +7,33 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/backoff"
+	"github.com/overtonx/outbox/v2/embedded"
+	"github.com/overtonx/outbox/v2/internal/metric"
 )
 
 type StuckEventServiceImpl struct {
 	db                *sql.DB
 	logger            *zap.Logger
-	backoffStrategy   BackoffStrategy
+	backoffStrategy   backoff.BackoffStrategy
 	maxAttempts       int
 	batchSize         int
 	stuckEventTimeout time.Duration
-	metrics           MetricsCollector
+	metrics           embedded.MetricsCollector
 }
 
 func NewStuckEventService(
 	db *sql.DB,
 	logger *zap.Logger,
-	backoffStrategy BackoffStrategy,
+	backoffStrategy backoff.BackoffStrategy,
 	maxAttempts int,
 	batchSize int,
 	stuckEventTimeout time.Duration,
-	metrics MetricsCollector,
+	metrics embedded.MetricsCollector,
 ) *StuckEventServiceImpl {
 	if metrics == nil {
-		metrics = NewNoOpMetricsCollector()
+		metrics = metric.NewNoOpMetricsCollector()
 	}
 
 	return &StuckEventServiceImpl{
@@ -67,7 +71,7 @@ func (s *StuckEventServiceImpl) RecoverStuckEvents(ctx context.Context) error {
 		FOR UPDATE SKIP LOCKED
 	`
 
-	rows, err := tx.QueryContext(ctx, query, EventRecordStatusProcessing, timeoutThreshold, s.batchSize)
+	rows, err := tx.QueryContext(ctx, query, embedded.EventRecordStatusProcessing, timeoutThreshold, s.batchSize)
 	if err != nil {
 		return fmt.Errorf("failed to query stuck events: %w", err)
 	}
@@ -105,9 +109,9 @@ func (s *StuckEventServiceImpl) RecoverStuckEvents(ctx context.Context) error {
 	for _, event := range stuckEvents {
 		var newStatus int
 		if event.AttemptCount >= s.maxAttempts {
-			newStatus = EventRecordStatusError
+			newStatus = embedded.EventRecordStatusError
 		} else {
-			newStatus = EventRecordStatusRetry
+			newStatus = embedded.EventRecordStatusRetry
 		}
 
 		nextAttempt := s.backoffStrategy.CalculateNextAttempt(event.AttemptCount)
@@ -131,7 +135,7 @@ func (s *StuckEventServiceImpl) RecoverStuckEvents(ctx context.Context) error {
 		s.logger.Info("Recovered stuck event",
 			zap.String("event_id", event.EventID),
 			zap.Int64("id", event.ID),
-			zap.Int("old_status", EventRecordStatusProcessing),
+			zap.Int("old_status", embedded.EventRecordStatusProcessing),
 			zap.Int("new_status", newStatus),
 			zap.Int("attempt_count", event.AttemptCount),
 			zap.Time("updated_at", event.UpdatedAt))

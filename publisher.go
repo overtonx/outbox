@@ -8,6 +8,8 @@ import (
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/embedded"
 )
 
 type NopPublisher struct {
@@ -20,7 +22,7 @@ func NewDefaultPublisher(logger *zap.Logger) *NopPublisher {
 	}
 }
 
-func (p *NopPublisher) Publish(_ context.Context, _ EventRecord) error {
+func (p *NopPublisher) Publish(_ context.Context, _ embedded.EventRecord) error {
 	return nil
 }
 
@@ -35,7 +37,7 @@ type KafkaPublisher struct {
 }
 
 // KafkaHeaderBuilder defines a function type for building Kafka message headers from an EventRecord.
-type KafkaHeaderBuilder func(record EventRecord) []kafka.Header
+type KafkaHeaderBuilder func(record embedded.EventRecord) []kafka.Header
 
 type KafkaConfig struct {
 	Topic         string
@@ -88,7 +90,7 @@ func NewKafkaPublisherFromProducer(logger *zap.Logger, producer *kafka.Producer,
 	return p
 }
 
-func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
+func (p *KafkaPublisher) Publish(_ context.Context, event embedded.EventRecord) error {
 	topic := event.Topic
 	if topic == "" {
 		topic = p.config.Topic
@@ -158,7 +160,7 @@ func (p *KafkaPublisher) handleDeliveryReports() {
 	}
 }
 
-func buildKafkaHeaders(event EventRecord) []kafka.Header {
+func buildKafkaHeaders(event embedded.EventRecord) []kafka.Header {
 	headers := []kafka.Header{
 		{Key: "event_id", Value: []byte(event.EventID)},
 		{Key: "event_type", Value: []byte(event.EventType)},

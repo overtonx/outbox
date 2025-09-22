@@ -1,4 +1,4 @@
-package outbox
+package processor
 
 import (
 	"context"
@@ -7,6 +7,9 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/embedded"
+	"github.com/overtonx/outbox/v2/internal/metric"
 )
 
 type CleanupServiceImpl struct {
@@ -15,7 +18,7 @@ type CleanupServiceImpl struct {
 	batchSize           int
 	deadLetterRetention time.Duration
 	sentEventsRetention time.Duration
-	metrics             MetricsCollector
+	metrics             embedded.MetricsCollector
 }
 
 func NewCleanupService(
@@ -24,10 +27,10 @@ func NewCleanupService(
 	batchSize int,
 	deadLetterRetention time.Duration,
 	sentEventsRetention time.Duration,
-	metrics MetricsCollector,
+	metrics embedded.MetricsCollector,
 ) *CleanupServiceImpl {
 	if metrics == nil {
-		metrics = NewNoOpMetricsCollector()
+		metrics = metric.NewNoOpMetricsCollector()
 	}
 
 	return &CleanupServiceImpl{
@@ -107,7 +110,7 @@ func (s *CleanupServiceImpl) cleanupSentEvents(ctx context.Context) (int64, erro
 		LIMIT ?
 	`
 
-	result, err := s.db.ExecContext(ctx, query, EventRecordStatusSent, cutoffTime, s.batchSize)
+	result, err := s.db.ExecContext(ctx, query, embedded.EventRecordStatusSent, cutoffTime, s.batchSize)
 	if err != nil {
 		return 0, fmt.Errorf("failed to cleanup sent events: %w", err)
 	}

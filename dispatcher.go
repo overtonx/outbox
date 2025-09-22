@@ -8,22 +8,18 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-)
 
-const (
-	EventRecordStatusNew        = 0
-	EventRecordStatusSent       = 1
-	EventRecordStatusRetry      = 2
-	EventRecordStatusError      = 3
-	EventRecordStatusProcessing = 4
+	"github.com/overtonx/outbox/v2/backoff"
+	"github.com/overtonx/outbox/v2/embedded"
+	"github.com/overtonx/outbox/v2/internal/metric"
+	"github.com/overtonx/outbox/v2/internal/processor"
+	"github.com/overtonx/outbox/v2/internal/worker"
 )
 
 const (
 	defaultBatchSize               = 100
 	defaultPollInterval            = 2 * time.Second
 	defaultMaxAttempts             = 3
-	defaultBaseDelay               = 1 * time.Minute
-	defaultMaxDelay                = 30 * time.Minute
 	defaultDeadLetterInterval      = 5 * time.Minute
 	defaultStuckEventTimeout       = 10 * time.Minute
 	defaultStuckEventCheckInterval = 2 * time.Minute
@@ -33,15 +29,15 @@ const (
 )
 
 type Dispatcher struct {
-	eventProcessor    EventProcessor
-	deadLetterService DeadLetterService
-	stuckEventService StuckEventService
-	cleanupService    CleanupService
-	publisher         Publisher
-	metrics           MetricsCollector
+	eventProcessor    embedded.EventProcessor
+	deadLetterService embedded.DeadLetterService
+	stuckEventService embedded.StuckEventService
+	cleanupService    embedded.CleanupService
+	publisher         embedded.Publisher
+	metrics           embedded.MetricsCollector
 	logger            *zap.Logger
 
-	workers                 []Worker
+	workers                 []embedded.Worker
 	batchSize               int
 	pollInterval            time.Duration
 	maxAttempts             int
@@ -57,33 +53,6 @@ type Dispatcher struct {
 	stopChan chan struct{}
 }
 
-type EventRecord struct {
-	ID            int64
-	AggregateType string
-	AggregateID   string
-	EventID       string
-	EventType     string
-	Payload       []byte
-	Headers       []byte
-	Topic         string
-	AttemptCount  int
-	NextAttemptAt *time.Time
-}
-
-type DeadLetterRecord struct {
-	ID            int64
-	EventID       string
-	EventType     string
-	AggregateType string
-	AggregateID   string
-	Topic         string
-	Payload       []byte
-	Headers       []byte
-	AttemptCount  int
-	LastError     string
-	CreatedAt     time.Time
-}
-
 func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 	options := &dispatcherOptions{
 		batchSize:               defaultBatchSize,
@@ -95,8 +64,8 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		deadLetterRetention:     defaultDeadLetterRetention,
 		sentEventsRetention:     defaultSentEventsRetention,
 		cleanupInterval:         defaultCleanupInterval,
-		backoffStrategy:         DefaultBackoffStrategy(),
-		metrics:                 NewOpenTelemetryMetricsCollector(),
+		backoffStrategy:         backoff.DefaultBackoffStrategy(),
+		metrics:                 metric.NewOpenTelemetryMetricsCollector(),
 		logger:                  zap.NewNop(),
 	}
 
@@ -118,7 +87,7 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		return nil, fmt.Errorf("failed to create outbox tables: %w", err)
 	}
 
-	eventProcessor := NewEventProcessor(
+	eventProcessor := processor.NewEventProcessor(
 		db,
 		options.logger,
 		options.backoffStrategy,
@@ -128,14 +97,14 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		options.metrics,
 	)
 
-	deadLetterService := NewDeadLetterService(
+	deadLetterService := processor.NewDeadLetterService(
 		db,
 		options.logger,
 		options.batchSize,
 		options.metrics,
 	)
 
-	stuckEventService := NewStuckEventService(
+	stuckEventService := processor.NewStuckEventService(
 		db,
 		options.logger,
 		options.backoffStrategy,
@@ -145,7 +114,7 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		options.metrics,
 	)
 
-	cleanupService := NewCleanupService(
+	cleanupService := processor.NewCleanupService(
 		db,
 		options.logger,
 		options.batchSize,
@@ -154,11 +123,11 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		options.metrics,
 	)
 
-	workers := []Worker{
-		NewBaseWorker("event_processor", options.pollInterval, options.logger, eventProcessor.ProcessEvents),
-		NewBaseWorker("deadletter_processor", options.deadLetterInterval, options.logger, deadLetterService.MoveToDeadLetters),
-		NewBaseWorker("stuck_events_processor", options.stuckEventCheckInterval, options.logger, stuckEventService.RecoverStuckEvents),
-		NewBaseWorker("cleanup_processor", options.cleanupInterval, options.logger, cleanupService.Cleanup),
+	workers := []embedded.Worker{
+		worker.NewBaseWorker("event_processor", options.pollInterval, options.logger, eventProcessor.ProcessEvents),
+		worker.NewBaseWorker("deadletter_processor", options.deadLetterInterval, options.logger, deadLetterService.MoveToDeadLetters),
+		worker.NewBaseWorker("stuck_events_processor", options.stuckEventCheckInterval, options.logger, stuckEventService.RecoverStuckEvents),
+		worker.NewBaseWorker("cleanup_processor", options.cleanupInterval, options.logger, cleanupService.Cleanup),
 	}
 
 	return &Dispatcher{

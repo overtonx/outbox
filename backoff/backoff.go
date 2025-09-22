@@ -1,8 +1,13 @@
-package outbox
+package backoff
 
 import (
 	"math"
 	"time"
+)
+
+const (
+	defaultBaseDelay = 1 * time.Minute
+	defaultMaxDelay  = 30 * time.Minute
 )
 
 type BackoffStrategy interface {

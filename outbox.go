@@ -9,6 +9,8 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"go.opentelemetry.io/otel"
+
+	"github.com/overtonx/outbox/v2/embedded"
 )
 
 var (
@@ -85,7 +87,7 @@ func insertEvent(ctx context.Context, exec DBExecutor, event Event) error {
 		event.Topic,
 		payloadJSON,
 		headersJSON,
-		EventRecordStatusNew,
+		embedded.EventRecordStatusNew,
 	)
 
 	return err

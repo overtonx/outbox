@@ -1,9 +1,44 @@
-package outbox
+package embedded
 
 import (
 	"context"
 	"time"
 )
+
+const (
+	EventRecordStatusNew        = 0
+	EventRecordStatusSent       = 1
+	EventRecordStatusRetry      = 2
+	EventRecordStatusError      = 3
+	EventRecordStatusProcessing = 4
+)
+
+type EventRecord struct {
+	ID            int64
+	AggregateType string
+	AggregateID   string
+	EventID       string
+	EventType     string
+	Payload       []byte
+	Headers       []byte
+	Topic         string
+	AttemptCount  int
+	NextAttemptAt *time.Time
+}
+
+type DeadLetterRecord struct {
+	ID            int64
+	EventID       string
+	EventType     string
+	AggregateType string
+	AggregateID   string
+	Topic         string
+	Payload       []byte
+	Headers       []byte
+	AttemptCount  int
+	LastError     string
+	CreatedAt     time.Time
+}
 
 type Publisher interface {
 	Publish(ctx context.Context, event EventRecord) error

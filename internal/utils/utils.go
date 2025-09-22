@@ -1,4 +1,4 @@
-package outbox
+package utils
 
 import (
 	"database/sql"
@@ -20,7 +20,7 @@ func NewDefaultLogger() (*zap.Logger, error) {
 	return config.Build()
 }
 
-func placeholders(count int) string {
+func Placeholders(count int) string {
 	if count == 0 {
 		return ""
 	}
@@ -32,7 +32,7 @@ func placeholders(count int) string {
 	return strings.Join(placeholders, ",")
 }
 
-func nullString(s string) sql.NullString {
+func NullString(s string) sql.NullString {
 	return sql.NullString{
 		String: s,
 		Valid:  s != "",

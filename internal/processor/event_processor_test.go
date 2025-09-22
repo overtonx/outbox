@@ -1,4 +1,4 @@
-package outbox
+package processor
 
 import (
 	"context"
@@ -8,6 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/backoff"
+	"github.com/overtonx/outbox/v2/embedded"
 )
 
 // MockPublisher is a mock implementation of Publisher interface
@@ -15,7 +18,7 @@ type MockPublisher struct {
 	mock.Mock
 }
 
-func (m *MockPublisher) Publish(ctx context.Context, event EventRecord) error {
+func (m *MockPublisher) Publish(ctx context.Context, event embedded.EventRecord) error {
 	args := m.Called(ctx, event)
 	return args.Error(0)
 }
@@ -44,7 +47,7 @@ func (m *MockMetricsCollector) RecordGauge(name string, value float64, tags map[
 
 func TestEventProcessorImpl_validateEvent(t *testing.T) {
 	logger := zap.NewNop()
-	backoff := DefaultBackoffStrategy()
+	backoff := backoff.DefaultBackoffStrategy()
 	maxAttempts := 3
 	batchSize := 10
 	mockPublisher := &MockPublisher{}
@@ -54,12 +57,12 @@ func TestEventProcessorImpl_validateEvent(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		event   EventRecord
+		event   embedded.EventRecord
 		wantErr bool
 	}{
 		{
 			name: "valid event",
-			event: EventRecord{
+			event: embedded.EventRecord{
 				ID:          1,
 				EventType:   "test",
 				AggregateID: "1",
@@ -70,7 +73,7 @@ func TestEventProcessorImpl_validateEvent(t *testing.T) {
 		},
 		{
 			name: "invalid ID",
-			event: EventRecord{
+			event: embedded.EventRecord{
 				ID:          0,
 				EventType:   "test",
 				AggregateID: "1",
@@ -81,7 +84,7 @@ func TestEventProcessorImpl_validateEvent(t *testing.T) {
 		},
 		{
 			name: "empty event type",
-			event: EventRecord{
+			event: embedded.EventRecord{
 				ID:          1,
 				AggregateID: "1",
 				Topic:       "topic",
@@ -91,7 +94,7 @@ func TestEventProcessorImpl_validateEvent(t *testing.T) {
 		},
 		{
 			name: "empty aggregate ID",
-			event: EventRecord{
+			event: embedded.EventRecord{
 				ID:        1,
 				EventType: "test",
 				Topic:     "topic",
@@ -101,7 +104,7 @@ func TestEventProcessorImpl_validateEvent(t *testing.T) {
 		},
 		{
 			name: "empty topic",
-			event: EventRecord{
+			event: embedded.EventRecord{
 				ID:          1,
 				EventType:   "test",
 				AggregateID: "1",
@@ -111,7 +114,7 @@ func TestEventProcessorImpl_validateEvent(t *testing.T) {
 		},
 		{
 			name: "empty payload",
-			event: EventRecord{
+			event: embedded.EventRecord{
 				ID:          1,
 				EventType:   "test",
 				AggregateID: "1",

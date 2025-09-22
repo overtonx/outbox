@@ -1,4 +1,4 @@
-package outbox
+package processor
 
 import (
 	"context"
@@ -8,29 +8,34 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+
+	"github.com/overtonx/outbox/v2/backoff"
+	"github.com/overtonx/outbox/v2/embedded"
+	"github.com/overtonx/outbox/v2/internal/metric"
+	"github.com/overtonx/outbox/v2/internal/utils"
 )
 
 type EventProcessorImpl struct {
 	db              *sql.DB
 	logger          *zap.Logger
-	backoffStrategy BackoffStrategy
+	backoffStrategy backoff.BackoffStrategy
 	maxAttempts     int
 	batchSize       int
-	publisher       Publisher
-	metrics         MetricsCollector
+	publisher       embedded.Publisher
+	metrics         embedded.MetricsCollector
 }
 
 func NewEventProcessor(
 	db *sql.DB,
 	logger *zap.Logger,
-	backoffStrategy BackoffStrategy,
+	backoffStrategy backoff.BackoffStrategy,
 	maxAttempts int,
 	batchSize int,
-	publisher Publisher,
-	metrics MetricsCollector,
+	publisher embedded.Publisher,
+	metrics embedded.MetricsCollector,
 ) *EventProcessorImpl {
 	if metrics == nil {
-		metrics = NewNoOpMetricsCollector()
+		metrics = metric.NewNoOpMetricsCollector()
 	}
 
 	return &EventProcessorImpl{
@@ -82,7 +87,7 @@ func (p *EventProcessorImpl) ProcessEvents(ctx context.Context) error {
 	return nil
 }
 
-func (p *EventProcessorImpl) processEvent(ctx context.Context, event EventRecord) error {
+func (p *EventProcessorImpl) processEvent(ctx context.Context, event embedded.EventRecord) error {
 	if err := p.validateEvent(event); err != nil {
 		return fmt.Errorf("invalid event: %w", err)
 	}
@@ -134,7 +139,7 @@ func (p *EventProcessorImpl) processEvent(ctx context.Context, event EventRecord
 	return p.handlePublishSuccess(ctx, event, attempt)
 }
 
-func (p *EventProcessorImpl) validateEvent(event EventRecord) error {
+func (p *EventProcessorImpl) validateEvent(event embedded.EventRecord) error {
 	if event.ID <= 0 {
 		return fmt.Errorf("invalid event ID: %d", event.ID)
 	}
@@ -153,7 +158,7 @@ func (p *EventProcessorImpl) validateEvent(event EventRecord) error {
 	return nil
 }
 
-func (p *EventProcessorImpl) handlePublishError(ctx context.Context, event EventRecord, attempt int, publishErr error) error {
+func (p *EventProcessorImpl) handlePublishError(ctx context.Context, event embedded.EventRecord, attempt int, publishErr error) error {
 	eventFields := []zap.Field{
 		zap.Int64("event_id", event.ID),
 		zap.String("event_type", event.EventType),
@@ -167,7 +172,7 @@ func (p *EventProcessorImpl) handlePublishError(ctx context.Context, event Event
 	var nextAttemptAt *time.Time
 
 	if attempt >= p.maxAttempts {
-		newStatus = EventRecordStatusError
+		newStatus = embedded.EventRecordStatusError
 		p.logger.Error("Event exceeded max attempts, marking as error",
 			append(eventFields, zap.Error(publishErr))...,
 		)
@@ -175,7 +180,7 @@ func (p *EventProcessorImpl) handlePublishError(ctx context.Context, event Event
 			"event_type": event.EventType,
 		})
 	} else {
-		newStatus = EventRecordStatusRetry
+		newStatus = embedded.EventRecordStatusRetry
 		nextAttempt := p.backoffStrategy.CalculateNextAttempt(attempt)
 		nextAttemptAt = &nextAttempt
 
@@ -208,7 +213,7 @@ func (p *EventProcessorImpl) handlePublishError(ctx context.Context, event Event
 		event.ID, attempt, p.maxAttempts, publishErr)
 }
 
-func (p *EventProcessorImpl) handlePublishSuccess(ctx context.Context, event EventRecord, attempt int) error {
+func (p *EventProcessorImpl) handlePublishSuccess(ctx context.Context, event embedded.EventRecord, attempt int) error {
 	eventFields := []zap.Field{
 		zap.Int64("event_id", event.ID),
 		zap.String("event_type", event.EventType),
@@ -216,7 +221,7 @@ func (p *EventProcessorImpl) handlePublishSuccess(ctx context.Context, event Eve
 		zap.Int("attempt", attempt),
 	}
 
-	if err := p.updateStatus(ctx, event.ID, EventRecordStatusSent, attempt, nil, nil); err != nil {
+	if err := p.updateStatus(ctx, event.ID, embedded.EventRecordStatusSent, attempt, nil, nil); err != nil {
 		p.logger.Error("Failed to update event status to sent in database",
 			append(eventFields, zap.Error(err))...,
 		)
@@ -229,13 +234,13 @@ func (p *EventProcessorImpl) handlePublishSuccess(ctx context.Context, event Eve
 	}
 
 	p.logger.Debug("Event status updated to sent",
-		append(eventFields, zap.Int("status", EventRecordStatusSent))...,
+		append(eventFields, zap.Int("status", embedded.EventRecordStatusSent))...,
 	)
 
 	return nil
 }
 
-func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
+func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []embedded.EventRecord {
 	tx, err := p.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		p.logger.Error("Failed to begin transaction", zap.Error(err))
@@ -261,11 +266,11 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 	}
 	defer rows.Close()
 
-	var events []EventRecord
+	var events []embedded.EventRecord
 	var eventIDs []int64
 
 	for rows.Next() {
-		var event EventRecord
+		var event embedded.EventRecord
 		var status int
 		var nextAttemptAt sql.NullTime
 
@@ -298,11 +303,11 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 	if len(eventIDs) > 0 {
 		updateQuery := fmt.Sprintf(
 			"UPDATE outbox_events SET status = ? WHERE id IN (%s)",
-			placeholders(len(eventIDs)),
+			utils.Placeholders(len(eventIDs)),
 		)
 
 		args := make([]interface{}, len(eventIDs)+1)
-		args[0] = EventRecordStatusProcessing
+		args[0] = embedded.EventRecordStatusProcessing
 
 		for i, id := range eventIDs {
 			args[i+1] = id
