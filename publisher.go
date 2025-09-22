@@ -113,12 +113,25 @@ func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
 
 func (p *KafkaPublisher) Close() error {
 	p.logger.Info("Closing kafka producer")
-	if _, err := p.producer.Flush(15 * 1000); err != nil { // 15 sec
-		p.logger.Error("Failed to flush kafka producer", zap.Error(err))
-		return fmt.Errorf("failed to flush kafka producer: %w", err)
+
+	if p.producer == nil {
+		return nil
 	}
+
+	var flushErr error
+	// Flush blocks until all messages are delivered or the timeout expires.
+	// It returns the number of messages still in the queue.
+	if remaining := p.producer.Flush(15 * 1000); remaining > 0 {
+		flushErr = fmt.Errorf("failed to flush kafka producer: %d messages remaining", remaining)
+		p.logger.Error("Failed to flush kafka producer", zap.Error(flushErr))
+	} else {
+		p.logger.Info("Successfully flushed kafka producer")
+	}
+
+	// Close the producer to release resources.
 	p.producer.Close()
-	return nil
+
+	return flushErr
 }
 
 func (p *KafkaPublisher) handleDeliveryReports() {
