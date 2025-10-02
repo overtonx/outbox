@@ -1,77 +1,118 @@
 package outbox
 
 import (
-	"encoding/json"
+	"context"
+	"database/sql"
+	"errors"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
-func TestNewOutboxEvent(t *testing.T) {
-	payload := struct {
-		Name string `json:"name"`
-	}{
-		Name: "test name",
-	}
-
-	event, err := NewOutboxEvent("1", "test", "event", "2", "topic", payload, map[string]string{})
-	require.NoError(t, err)
-
-	jsonRaw, err := json.Marshal(event.Payload)
-	require.NoError(t, err)
-	require.Equal(t, string(jsonRaw), `{"name":"test name"}`)
-
+type MockDBExecutor struct {
+	mock.Mock
 }
 
-func TestValidateOutboxEvent(t *testing.T) {
-	tests := []struct {
-		name    string
-		event   Event
-		wantErr bool
-	}{
-		{
-			name: "valid event",
-			event: Event{
-				AggregateType: "test",
-				AggregateID:   "1",
-				Topic:         "topic",
-			},
-			wantErr: false,
-		},
-		{
-			name: "missing aggregate_type",
-			event: Event{
-				AggregateID: "1",
-				Topic:       "topic",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing aggregate_id",
-			event: Event{
-				AggregateType: "test",
-				Topic:         "topic",
-			},
-			wantErr: true,
-		},
-		{
-			name: "missing topic",
-			event: Event{
-				AggregateType: "test",
-				AggregateID:   "1",
-			},
-			wantErr: true,
-		},
+func (m *MockDBExecutor) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	arguments := m.Called(ctx, query, args)
+	res, _ := arguments.Get(0).(sql.Result)
+	return res, arguments.Error(1)
+}
+
+func TestSaveEvent(t *testing.T) {
+	ctx := context.Background()
+	mockExecutor := new(MockDBExecutor)
+
+	baseEvent := Event{
+		EventType:     "test_event",
+		AggregateType: "test_aggregate",
+		AggregateID:   "agg_id_123",
+		Topic:         "test_topic",
+		Payload:       map[string]string{"data": "some_data"},
+		Headers:       map[string]string{"source": "test"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateOutboxEvent(tt.event)
-			if tt.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
+	t.Run("success", func(t *testing.T) {
+		event := baseEvent
+		event.EventID = uuid.NewString()
+		mockExecutor.On("ExecContext", ctx, mock.Anything, mock.Anything).Return(nil, nil).Once()
+
+		err := SaveEvent(ctx, mockExecutor, event)
+
+		assert.NoError(t, err)
+		mockExecutor.AssertExpectations(t)
+	})
+
+	t.Run("success with generated event_id", func(t *testing.T) {
+		event := baseEvent
+		event.EventID = "" // ID should be generated
+		mockExecutor.On("ExecContext", ctx, mock.Anything, mock.Anything).Return(nil, nil).Once()
+
+		err := SaveEvent(ctx, mockExecutor, event)
+
+		assert.NoError(t, err)
+		mockExecutor.AssertExpectations(t)
+	})
+
+	t.Run("validation failed", func(t *testing.T) {
+		testCases := []struct {
+			name    string
+			event   Event
+			wantErr string
+		}{
+			{"missing aggregate type", Event{EventID: "1", AggregateID: "1", Topic: "t"}, "validation failed: aggregate_type is required"},
+			{"missing aggregate id", Event{EventID: "1", AggregateType: "t", Topic: "t"}, "validation failed: aggregate_id is required"},
+			{"missing topic", Event{EventID: "1", AggregateType: "t", AggregateID: "1"}, "validation failed: topic is required"},
+		}
+
+		for _, tc := range testCases {
+			t.Run(tc.name, func(t *testing.T) {
+				err := SaveEvent(ctx, mockExecutor, tc.event)
+				assert.Error(t, err)
+				assert.Equal(t, tc.wantErr, err.Error())
+			})
+		}
+	})
+
+	t.Run("insert returns duplicate error", func(t *testing.T) {
+		event := baseEvent
+		event.EventID = uuid.NewString()
+		dbErr := &mysql.MySQLError{Number: 1062}
+		mockExecutor.On("ExecContext", ctx, mock.Anything, mock.Anything).Return(nil, dbErr).Once()
+
+		err := SaveEvent(ctx, mockExecutor, event)
+
+		assert.Error(t, err)
+		assert.True(t, errors.Is(err, ErrEventAlreadyExists))
+		mockExecutor.AssertExpectations(t)
+	})
+
+	t.Run("insert returns generic db error", func(t *testing.T) {
+		event := baseEvent
+		event.EventID = uuid.NewString()
+		dbErr := errors.New("some db error")
+		mockExecutor.On("ExecContext", ctx, mock.Anything, mock.Anything).Return(nil, dbErr).Once()
+
+		err := SaveEvent(ctx, mockExecutor, event)
+
+		assert.Error(t, err)
+		assert.False(t, errors.Is(err, ErrEventAlreadyExists))
+		assert.Contains(t, err.Error(), "failed to save outbox event")
+		mockExecutor.AssertExpectations(t)
+	})
+
+	t.Run("payload marshal error", func(t *testing.T) {
+		event := baseEvent
+		event.EventID = uuid.NewString()
+		// Use a channel, which cannot be marshaled to JSON
+		event.Payload = make(chan int)
+
+		err := SaveEvent(ctx, mockExecutor, event)
+
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to marshal payload")
+	})
 }

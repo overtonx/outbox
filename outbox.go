@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 )
 
@@ -92,6 +93,11 @@ func insertEvent(ctx context.Context, exec DBExecutor, event Event) error {
 }
 
 func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
+	if event.EventID == "" {
+		eventID, _ := uuid.NewV7()
+		event.EventID = eventID.String()
+	}
+
 	if err := validateOutboxEvent(event); err != nil {
 		return fmt.Errorf("validation failed: %w", err)
 	}
@@ -189,6 +195,9 @@ func createOutboxDeadlettersTable(ctx context.Context, db *sql.DB) error {
 }
 
 func validateOutboxEvent(event Event) error {
+	if event.EventID == "" {
+		return fmt.Errorf("event_id is required")
+	}
 	if event.AggregateType == "" {
 		return fmt.Errorf("aggregate_type is required")
 	}
