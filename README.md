@@ -108,16 +108,16 @@ CREATE TABLE outbox_deadletters (
 
 ### Доступные сериализаторы
 
-| Пакет                                              | Тип                | `content_type`         | Описание                              |
-|----------------------------------------------------|--------------------|------------------------|---------------------------------------|
-| `github.com/overtonx/outbox/v3`                    | `JSONSerializer`   | `application/json`     | Встроен, используется по умолчанию    |
-| `github.com/overtonx/outbox/v3/protoserializer`    | `ProtoSerializer`  | `application/protobuf` | Protobuf binary encoding              |
+Все сериализаторы находятся в основном пакете `github.com/overtonx/outbox/v3`.
 
-Константы `ContentTypeJSON` и `ContentTypeProtobuf` экспортируются из основного пакета для использования в потребителях.
+| Тип                | `content_type`         | Описание                           |
+|--------------------|------------------------|------------------------------------|
+| `JSONSerializer`   | `application/json`     | JSON-кодирование (по умолчанию)    |
+| `ProtoSerializer`  | `application/protobuf` | Protobuf binary encoding           |
+
+Константы `ContentTypeJSON` и `ContentTypeProtobuf` экспортируются для использования в потребителях.
 
 ### JSONSerializer
-
-Встроен в основной пакет, не требует дополнительных зависимостей.
 
 ```go
 ob := outbox.New(db, outbox.JSONSerializer{})
@@ -125,17 +125,10 @@ ob := outbox.New(db, outbox.JSONSerializer{})
 
 ### ProtoSerializer
 
-```go
-go get github.com/overtonx/outbox/v3/protoserializer
-```
+Payload должен реализовывать `proto.Message`.
 
 ```go
-import (
-    "github.com/overtonx/outbox/v3"
-    "github.com/overtonx/outbox/v3/protoserializer"
-)
-
-ob := outbox.New(db, protoserializer.ProtoSerializer{})
+ob := outbox.New(db, outbox.ProtoSerializer{})
 store := ob.EventStore()
 err := store.Save(ctx, tx, outbox.Event{
     EventType:     "order.created",
