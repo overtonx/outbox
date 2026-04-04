@@ -113,6 +113,6 @@ func TestSaveEvent(t *testing.T) {
 		err := SaveEvent(ctx, mockExecutor, event)
 
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to marshal payload")
+		assert.Contains(t, err.Error(), "failed to serialize payload")
 	})
 }
