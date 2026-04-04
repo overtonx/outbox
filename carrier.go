@@ -27,6 +27,10 @@ func (mc *MessageCarrier) Get(key string) string {
 
 // Set sets the value associated with the given key.
 func (mc *MessageCarrier) Set(key string, value string) {
+	if mc.event.Headers == nil {
+		mc.event.Headers = make(map[string]string)
+	}
+
 	mc.event.Headers[key] = value
 }
 
