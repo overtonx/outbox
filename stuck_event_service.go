@@ -128,7 +128,7 @@ func (s *StuckEventServiceImpl) RecoverStuckEvents(ctx context.Context) error {
 		}
 
 		recoveredCount++
-		s.logger.Info("Recovered stuck event",
+		s.logger.Debug("Recovered stuck event",
 			zap.String("event_id", event.EventID),
 			zap.Int64("id", event.ID),
 			zap.Int("old_status", EventRecordStatusProcessing),

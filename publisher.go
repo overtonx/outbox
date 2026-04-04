@@ -94,7 +94,7 @@ func (p *KafkaPublisher) Publish(ctx context.Context, event EventRecord) error {
 		topic = p.config.Topic
 	}
 
-	p.logger.Info("Publishing event to Kafka",
+	p.logger.Debug("Publishing event to Kafka",
 		zap.String("event_id", event.EventID),
 		zap.String("event_type", event.EventType),
 		zap.String("topic", topic),

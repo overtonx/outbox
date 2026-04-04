@@ -55,7 +55,7 @@ func (p *EventProcessorImpl) ProcessEvents(ctx context.Context) error {
 		return nil
 	}
 
-	p.logger.Info("Fetched events for processing", zap.Int("count", len(events)))
+	p.logger.Debug("Fetched events for processing", zap.Int("count", len(events)))
 
 	p.metrics.RecordGauge("event_processor.batch_size", float64(len(events)), nil)
 
@@ -75,7 +75,7 @@ func (p *EventProcessorImpl) ProcessEvents(ctx context.Context) error {
 		}
 	}
 
-	p.logger.Info("Batch processing completed",
+	p.logger.Debug("Batch processing completed",
 		zap.Int("processed", processed),
 		zap.Int("failed", failed))
 
@@ -127,7 +127,7 @@ func (p *EventProcessorImpl) processEvent(ctx context.Context, event EventRecord
 		"event_type": event.EventType,
 	})
 
-	p.logger.Info("Event published successfully to Kafka",
+	p.logger.Debug("Event published successfully to Kafka",
 		append(eventFields)...,
 	)
 
