@@ -44,10 +44,10 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 	defer tx.Rollback()
 
 	query := `
-		SELECT id, event_id, event_type, aggregate_type, aggregate_id, topic, 
-		       payload, headers, attempt_count, last_error, created_at
-		FROM outbox_events 
-		WHERE status = ? 
+		SELECT id, event_id, event_type, aggregate_type, aggregate_id, topic,
+		       content_type, payload, headers, attempt_count, last_error, created_at
+		FROM outbox_events
+		WHERE status = ?
 		LIMIT ?
 		FOR UPDATE SKIP LOCKED
 	`
@@ -72,6 +72,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 			&event.AggregateType,
 			&event.AggregateID,
 			&event.Topic,
+			&event.ContentType,
 			&event.Payload,
 			&event.Headers,
 			&event.AttemptCount,
@@ -96,10 +97,10 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 	}
 
 	insertQuery := `
-		INSERT INTO outbox_deadletters 
-		(id, event_id, event_type, aggregate_type, aggregate_id, topic, payload, 
-		 headers, attempt_count, last_error, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO outbox_deadletters
+		(id, event_id, event_type, aggregate_type, aggregate_id, topic,
+		 content_type, payload, headers, attempt_count, last_error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	movedCount := 0
@@ -112,6 +113,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 			event.AggregateType,
 			event.AggregateID,
 			event.Topic,
+			event.ContentType,
 			event.Payload,
 			event.Headers,
 			event.AttemptCount,

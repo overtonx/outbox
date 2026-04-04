@@ -104,6 +104,7 @@ func TestBuildKafkaHeaders(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
+		"content-type":   ContentTypeJSON,
 	}
 
 	assert.Equal(t, len(expectedHeaders), len(headers))
@@ -134,6 +135,7 @@ func TestBuildKafkaHeadersWithoutTraceInfo(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
+		"content-type":   ContentTypeJSON,
 	}
 
 	assert.Equal(t, len(expectedHeaders), len(headers))
@@ -165,6 +167,7 @@ func TestBuildKafkaHeadersWithCustomHeaders(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
+		"content-type":   ContentTypeJSON,
 		"custom_key":     "custom_value",
 		"another":        "value",
 	}

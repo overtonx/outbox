@@ -3,12 +3,10 @@ package outbox
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 )
 
@@ -57,58 +55,12 @@ func injectTraceContext(ctx context.Context, event *Event) {
 	otel.GetTextMapPropagator().Inject(ctx, carrier)
 }
 
-// insertEvent marshals the event payload and headers and inserts the event into the database.
-func insertEvent(ctx context.Context, exec DBExecutor, event Event) error {
-	payloadJSON, err := json.Marshal(event.Payload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal payload: %w", err)
-	}
-
-	var headersJSON []byte
-	if len(event.Headers) > 0 {
-		headersJSON, err = json.Marshal(event.Headers)
-		if err != nil {
-			return fmt.Errorf("failed to marshal headers: %w", err)
-		}
-	}
-
-	query := `
-		INSERT INTO outbox_events 
-		(event_id, event_type, aggregate_type, aggregate_id, topic, payload, headers, status)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`
-
-	_, err = exec.ExecContext(ctx, query,
-		event.EventID,
-		event.EventType,
-		event.AggregateType,
-		event.AggregateID,
-		event.Topic,
-		payloadJSON,
-		headersJSON,
-		EventRecordStatusNew,
-	)
-
-	return err
-}
-
+// SaveEvent saves an event to the outbox table using JSON serialization.
+//
+// Deprecated: Use EventStore.Save with an explicit Serializer instead.
+// SaveEvent will be removed in a future major version.
 func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
-	if event.EventID == "" {
-		eventID, _ := uuid.NewV7()
-		event.EventID = eventID.String()
-	}
-
-	if err := validateOutboxEvent(event); err != nil {
-		return fmt.Errorf("validation failed: %w", err)
-	}
-
-	injectTraceContext(ctx, &event)
-
-	if err := insertEvent(ctx, exec, event); err != nil {
-		return fmt.Errorf("failed to save outbox event: %w", convertFromDBError(err))
-	}
-
-	return nil
+	return NewEventStore(JSONSerializer{}).Save(ctx, exec, event)
 }
 
 func convertFromDBError(err error) error {
@@ -147,7 +99,8 @@ func createOutboxEventsTable(ctx context.Context, db *sql.DB) error {
 			aggregate_id    VARCHAR(255) NOT NULL,
 			status          INT          NOT NULL DEFAULT 0 COMMENT '0 - new, 1 - success, 2 - retry, 3 - error, 4 - processing',
 			topic           VARCHAR(255) NOT NULL,
-			payload         JSON         NOT NULL,
+			content_type    VARCHAR(100) NOT NULL DEFAULT 'application/json',
+			payload         LONGBLOB     NOT NULL,
 			headers         JSON         NULL,
 			attempt_count   INT          NOT NULL DEFAULT 0,
 			next_attempt_at TIMESTAMP    NULL,
@@ -178,7 +131,8 @@ func createOutboxDeadlettersTable(ctx context.Context, db *sql.DB) error {
 		    aggregate_type  VARCHAR(255)  NOT NULL,
 		    aggregate_id    VARCHAR(255)  NOT NULL,
 		    topic           VARCHAR(255)  NOT NULL,
-		    payload         JSON          NOT NULL,
+		    content_type    VARCHAR(100)  NOT NULL DEFAULT 'application/json',
+		    payload         LONGBLOB      NOT NULL,
 		    headers         JSON          NULL,
 		    attempt_count   INT           NOT NULL,
 		    last_error      VARCHAR(2000) NULL,

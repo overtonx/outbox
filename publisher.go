@@ -182,11 +182,17 @@ func (p *KafkaPublisher) handleDeliveryReports() {
 }
 
 func buildKafkaHeaders(event EventRecord) []kafka.Header {
+	contentType := event.ContentType
+	if contentType == "" {
+		contentType = ContentTypeJSON
+	}
+
 	headers := []kafka.Header{
 		{Key: "event_id", Value: []byte(event.EventID)},
 		{Key: "event_type", Value: []byte(event.EventType)},
 		{Key: "aggregate_type", Value: []byte(event.AggregateType)},
 		{Key: "aggregate_id", Value: []byte(event.AggregateID)},
+		{Key: "content-type", Value: []byte(contentType)},
 	}
 
 	if len(event.Headers) > 0 {

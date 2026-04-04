@@ -1,4 +1,4 @@
-module github.com/overtonx/outbox/v2
+module github.com/overtonx/outbox/v3
 
 go 1.24.0
 

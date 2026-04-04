@@ -63,6 +63,7 @@ type EventRecord struct {
 	AggregateID   string
 	EventID       string
 	EventType     string
+	ContentType   string
 	Payload       []byte
 	Headers       []byte
 	Topic         string
@@ -77,6 +78,7 @@ type DeadLetterRecord struct {
 	AggregateType string
 	AggregateID   string
 	Topic         string
+	ContentType   string
 	Payload       []byte
 	Headers       []byte
 	AttemptCount  int

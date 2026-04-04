@@ -244,10 +244,10 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 	defer tx.Rollback()
 
 	query := `
-		SELECT id, event_id, event_type, aggregate_type, aggregate_id, 
-		       status, topic, payload, headers, 
+		SELECT id, event_id, event_type, aggregate_type, aggregate_id,
+		       status, topic, content_type, payload, headers,
 		       attempt_count, next_attempt_at
-		FROM outbox_events 
+		FROM outbox_events
 		WHERE (status = 0) OR (status = 2 AND next_attempt_at <= NOW())
 		ORDER BY created_at ASC
 		LIMIT ?
@@ -277,6 +277,7 @@ func (p *EventProcessorImpl) fetchBatch(ctx context.Context) []EventRecord {
 			&event.AggregateID,
 			&status,
 			&event.Topic,
+			&event.ContentType,
 			&event.Payload,
 			&event.Headers,
 			&event.AttemptCount,
