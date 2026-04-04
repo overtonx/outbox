@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/overtonx/outbox/v3/serializer"
 	"go.opentelemetry.io/otel"
 )
 
@@ -60,7 +61,7 @@ func injectTraceContext(ctx context.Context, event *Event) {
 // Deprecated: Use EventStore.Save with an explicit Serializer instead.
 // SaveEvent will be removed in a future major version.
 func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
-	return NewEventStore(JSONSerializer{}).Save(ctx, exec, event)
+	return NewEventStore(serializer.JSONSerializer{}).Save(ctx, exec, event)
 }
 
 func convertFromDBError(err error) error {

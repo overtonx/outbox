@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/overtonx/outbox/v3/serializer"
 	"go.uber.org/zap"
 )
 
@@ -196,7 +197,7 @@ var reservedKafkaHeaderKeys = map[string]struct{}{
 func buildKafkaHeaders(event EventRecord) []kafka.Header {
 	contentType := event.ContentType
 	if contentType == "" {
-		contentType = ContentTypeJSON
+		contentType = serializer.ContentTypeJSON
 	}
 
 	headers := []kafka.Header{

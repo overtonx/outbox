@@ -6,16 +6,17 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/overtonx/outbox/v3/serializer"
 )
 
 // EventStore saves events to the outbox table using the configured Serializer.
 type EventStore struct {
-	serializer Serializer
+	serializer serializer.Serializer
 }
 
 // NewEventStore creates an EventStore with the given Serializer.
-func NewEventStore(serializer Serializer) *EventStore {
-	return &EventStore{serializer: serializer}
+func NewEventStore(s serializer.Serializer) *EventStore {
+	return &EventStore{serializer: s}
 }
 
 // Save serializes the event payload with the configured Serializer and inserts

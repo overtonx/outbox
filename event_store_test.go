@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/overtonx/outbox/v3/serializer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -15,7 +16,7 @@ func TestEventStore_Save_Success(t *testing.T) {
 	executor := new(MockDBExecutor)
 	executor.On("ExecContext", ctx, mock.Anything, mock.Anything).Return(nil, nil).Once()
 
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 	event := Event{
 		EventType:     "order.created",
 		AggregateType: "order",
@@ -41,7 +42,7 @@ func TestEventStore_Save_AutoGeneratesEventID(t *testing.T) {
 		}).
 		Return(nil, nil).Once()
 
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 	event := Event{
 		EventType:     "order.created",
 		AggregateType: "order",
@@ -62,7 +63,7 @@ func TestEventStore_Save_SerializationError(t *testing.T) {
 	ctx := context.Background()
 	executor := new(MockDBExecutor)
 
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 	event := Event{
 		EventType:     "order.created",
 		AggregateType: "order",
@@ -81,7 +82,7 @@ func TestEventStore_Save_SerializationError(t *testing.T) {
 func TestEventStore_Save_ValidationError(t *testing.T) {
 	ctx := context.Background()
 	executor := new(MockDBExecutor)
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 
 	cases := []struct {
 		name    string
@@ -121,7 +122,7 @@ func TestEventStore_Save_DuplicateKeyError(t *testing.T) {
 	executor.On("ExecContext", ctx, mock.Anything, mock.Anything).
 		Return(nil, &mysql.MySQLError{Number: 1062}).Once()
 
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 	event := Event{
 		EventID:       "dup-id",
 		EventType:     "order.created",
@@ -144,7 +145,7 @@ func TestEventStore_Save_GenericDBError(t *testing.T) {
 	executor.On("ExecContext", ctx, mock.Anything, mock.Anything).
 		Return(nil, errors.New("connection reset")).Once()
 
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 	event := Event{
 		EventID:       "evt-1",
 		EventType:     "order.created",
@@ -175,7 +176,7 @@ func TestEventStore_Save_ContentTypeInQuery(t *testing.T) {
 		}).
 		Return(nil, nil).Once()
 
-	store := NewEventStore(JSONSerializer{})
+	store := NewEventStore(serializer.JSONSerializer{})
 	event := Event{
 		EventID:       "evt-1",
 		EventType:     "order.created",
@@ -190,5 +191,5 @@ func TestEventStore_Save_ContentTypeInQuery(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Contains(t, capturedQuery, "content_type")
 	// content_type arg should be "application/json"
-	assert.Equal(t, ContentTypeJSON, capturedArgs[5])
+	assert.Equal(t, serializer.ContentTypeJSON, capturedArgs[5])
 }

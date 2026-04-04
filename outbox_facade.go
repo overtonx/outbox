@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"database/sql"
+
+	"github.com/overtonx/outbox/v3/serializer"
 )
 
 // Outbox is the central entry point for the outbox pattern.
@@ -9,16 +11,16 @@ import (
 // for EventStore and Dispatcher.
 type Outbox struct {
 	db         *sql.DB
-	serializer Serializer
+	serializer serializer.Serializer
 }
 
 // New creates an Outbox with the given database connection and Serializer.
-// Use JSONSerializer for JSON payloads or implement the Serializer interface
-// for other formats (e.g. protobuf, Avro).
-func New(db *sql.DB, serializer Serializer) *Outbox {
+// Use serializer.JSONSerializer for JSON payloads or implement the
+// serializer.Serializer interface for other formats (e.g. protobuf, Avro).
+func New(db *sql.DB, s serializer.Serializer) *Outbox {
 	return &Outbox{
 		db:         db,
-		serializer: serializer,
+		serializer: s,
 	}
 }
 
