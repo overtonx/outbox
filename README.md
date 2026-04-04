@@ -106,31 +106,36 @@ CREATE TABLE outbox_deadletters (
 
 `Outbox` использует интерфейс `Serializer` для преобразования payload перед записью в БД. Тип сериализации сохраняется в колонке `content_type` и передаётся потребителям Kafka через заголовок `content-type`.
 
-### Встроенные типы
+### Доступные сериализаторы
 
-| Константа              | Значение               | Сериализатор      |
-|------------------------|------------------------|-------------------|
-| `ContentTypeJSON`      | `application/json`     | `JSONSerializer`  |
-| `ContentTypeProtobuf`  | `application/protobuf` | реализуйте сами   |
+| Пакет                                              | Тип                | `content_type`         | Описание                              |
+|----------------------------------------------------|--------------------|------------------------|---------------------------------------|
+| `github.com/overtonx/outbox/v3`                    | `JSONSerializer`   | `application/json`     | Встроен, используется по умолчанию    |
+| `github.com/overtonx/outbox/v3/protoserializer`    | `ProtoSerializer`  | `application/protobuf` | Protobuf binary encoding              |
 
-### Пользовательский сериализатор (protobuf)
+Константы `ContentTypeJSON` и `ContentTypeProtobuf` экспортируются из основного пакета для использования в потребителях.
+
+### JSONSerializer
+
+Встроен в основной пакет, не требует дополнительных зависимостей.
 
 ```go
-type ProtoSerializer struct{}
+ob := outbox.New(db, outbox.JSONSerializer{})
+```
 
-func (ProtoSerializer) Marshal(v interface{}) ([]byte, error) {
-    msg, ok := v.(proto.Message)
-    if !ok {
-        return nil, fmt.Errorf("expected proto.Message, got %T", v)
-    }
-    return proto.Marshal(msg)
-}
+### ProtoSerializer
 
-func (ProtoSerializer) ContentType() string { return outbox.ContentTypeProtobuf }
+```go
+go get github.com/overtonx/outbox/v3/protoserializer
 ```
 
 ```go
-ob := outbox.New(db, ProtoSerializer{})
+import (
+    "github.com/overtonx/outbox/v3"
+    "github.com/overtonx/outbox/v3/protoserializer"
+)
+
+ob := outbox.New(db, protoserializer.ProtoSerializer{})
 store := ob.EventStore()
 err := store.Save(ctx, tx, outbox.Event{
     EventType:     "order.created",
@@ -142,6 +147,17 @@ err := store.Save(ctx, tx, outbox.Event{
 ```
 
 Потребители Kafka получат заголовок `content-type: application/protobuf` и смогут выбрать нужный десериализатор.
+
+### Свой сериализатор
+
+Реализуйте интерфейс `Serializer` для любого другого формата (Avro, MessagePack и т.д.):
+
+```go
+type Serializer interface {
+    Marshal(v interface{}) ([]byte, error)
+    ContentType() string
+}
+```
 
 ## Конфигурация Диспетчера (`Dispatcher`)
 
@@ -231,18 +247,6 @@ kafkaConfig := outbox.KafkaConfig{
     ```
 
 2.  **Топик по умолчанию**: Если поле `Topic` пустое, используется топик из `KafkaConfig.Topic`.
-
-## Миграция с v1 на v2
-
-В версии v2 изменилась схема таблиц: поля `trace_id` и `span_id` заменены одним полем `headers` типа `JSON`.
-
-```sql
-ALTER TABLE outbox_events ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
-ALTER TABLE outbox_deadletters ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
-
-ALTER TABLE outbox_events DROP COLUMN trace_id, DROP COLUMN span_id;
-ALTER TABLE outbox_deadletters DROP COLUMN trace_id, DROP COLUMN span_id;
-```
 
 ## Миграция с v2 на v3
 
