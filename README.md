@@ -136,18 +136,110 @@ kafkaConfig := outbox.KafkaConfig{
 
 ## Миграция с v1 на v2
 
-В версии v2 изменилась схема таблицы `outbox_events` и `outbox_deadletters`. Поля `trace_id` и `span_id` были заменены одним универсальным полем `headers` типа `JSON` для большей гибкости при хранении метаданных.
+В версии v2 изменилась схема таблицы `outbox_events` и `outbox_deadletters`. Поля `trace_id` и `span_id` были заменены одним универсальным полем `headers` типа `JSON`.
 
-Для ручного обновления схемы базы данных (на примере MySQL) выполните следующие запросы:
+```sql
+ALTER TABLE outbox_events ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
+ALTER TABLE outbox_deadletters ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
 
-1.  **Добавьте колонки `headers`:**
-    ```sql
-    ALTER TABLE outbox_events ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
-    ALTER TABLE outbox_deadletters ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
-    ```
+ALTER TABLE outbox_events DROP COLUMN trace_id, DROP COLUMN span_id;
+ALTER TABLE outbox_deadletters DROP COLUMN trace_id, DROP COLUMN span_id;
+```
 
-2.  **Удалите старые колонки:**
-    ```sql
-    ALTER TABLE outbox_events DROP COLUMN trace_id, DROP COLUMN span_id;
-    ALTER TABLE outbox_deadletters DROP COLUMN trace_id, DROP COLUMN span_id;
-    ```
+## Миграция с v2 на v3
+
+### Установка
+
+```go
+go get github.com/overtonx/outbox/v3
+```
+
+Замените импорты:
+
+```go
+// было
+import "github.com/overtonx/outbox/v2"
+
+// стало
+import "github.com/overtonx/outbox/v3"
+```
+
+### Изменения схемы БД
+
+В v3 колонка `payload` переведена из `JSON` в `LONGBLOB` для поддержки бинарных форматов (protobuf, Avro и др.). Добавлена колонка `content_type` для указания формата сериализации.
+
+```sql
+-- outbox_events
+ALTER TABLE outbox_events
+    MODIFY COLUMN payload LONGBLOB NOT NULL,
+    ADD COLUMN content_type VARCHAR(100) NOT NULL DEFAULT 'application/json' AFTER topic;
+
+-- outbox_deadletters
+ALTER TABLE outbox_deadletters
+    MODIFY COLUMN payload LONGBLOB NOT NULL,
+    ADD COLUMN content_type VARCHAR(100) NOT NULL DEFAULT 'application/json' AFTER topic;
+```
+
+> **Важно:** выполните миграцию в обслуживающем окне. После изменения типа `payload` откат потребует повторного преобразования данных.
+
+### Изменения API
+
+В v3 появился фасад `Outbox` как единая точка входа, а `SaveEvent` помечена как устаревшая.
+
+**Было (v2):**
+
+```go
+// Сохранение события
+err := outbox.SaveEvent(ctx, tx, event)
+
+// Создание диспетчера
+dispatcher, err := outbox.NewDispatcher(db, outbox.WithLogger(logger))
+```
+
+**Стало (v3):**
+
+```go
+// Создание фасада с выбором сериализатора
+ob := outbox.New(db, outbox.JSONSerializer{})
+
+// Сохранение события через EventStore
+store := ob.EventStore()
+err := store.Save(ctx, tx, event)
+
+// Создание диспетчера через фасад
+dispatcher, err := ob.Dispatcher(outbox.WithLogger(logger))
+```
+
+`SaveEvent` продолжает работать через делегирование к `EventStore` с `JSONSerializer` — ломающих изменений для существующего кода нет, но функция будет удалена в v4.
+
+### Поддержка protobuf
+
+Реализуйте интерфейс `Serializer` в своём сервисе:
+
+```go
+type ProtoSerializer struct{}
+
+func (ProtoSerializer) Marshal(v interface{}) ([]byte, error) {
+    msg, ok := v.(proto.Message)
+    if !ok {
+        return nil, fmt.Errorf("expected proto.Message, got %T", v)
+    }
+    return proto.Marshal(msg)
+}
+
+func (ProtoSerializer) ContentType() string { return outbox.ContentTypeProtobuf }
+```
+
+```go
+ob := outbox.New(db, ProtoSerializer{})
+store := ob.EventStore()
+err := store.Save(ctx, tx, outbox.Event{
+    EventType:     "order.created",
+    AggregateType: "order",
+    AggregateID:   "order-1",
+    Topic:         "orders",
+    Payload:       myProtoMessage, // proto.Message
+})
+```
+
+Потребители Kafka получат заголовок `content-type: application/protobuf` и смогут выбрать нужный десериализатор.
