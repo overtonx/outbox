@@ -220,6 +220,10 @@ func (d *Dispatcher) Start(ctx context.Context) {
 		worker.Stop()
 	}
 
+	if err := d.publisher.Close(); err != nil {
+		d.logger.Error("Failed to close publisher", zap.Error(err))
+	}
+
 	d.mu.Lock()
 	d.started = false
 	d.mu.Unlock()

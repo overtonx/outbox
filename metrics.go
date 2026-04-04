@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -40,6 +41,7 @@ func (m *PrometheusMetricsCollector) RecordGauge(name string, value float64, tag
 
 type OpenTelemetryMetricsCollector struct {
 	meter metric.Meter
+	mu    sync.RWMutex
 
 	counters   map[string]metric.Int64Counter
 	histograms map[string]metric.Float64Histogram
@@ -97,6 +99,15 @@ func (m *OpenTelemetryMetricsCollector) RecordGauge(name string, value float64, 
 }
 
 func (m *OpenTelemetryMetricsCollector) getOrCreateCounter(name string) (metric.Int64Counter, error) {
+	m.mu.RLock()
+	if counter, exists := m.counters[name]; exists {
+		m.mu.RUnlock()
+		return counter, nil
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if counter, exists := m.counters[name]; exists {
 		return counter, nil
 	}
@@ -115,6 +126,15 @@ func (m *OpenTelemetryMetricsCollector) getOrCreateCounter(name string) (metric.
 }
 
 func (m *OpenTelemetryMetricsCollector) getOrCreateHistogram(name string) (metric.Float64Histogram, error) {
+	m.mu.RLock()
+	if histogram, exists := m.histograms[name]; exists {
+		m.mu.RUnlock()
+		return histogram, nil
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if histogram, exists := m.histograms[name]; exists {
 		return histogram, nil
 	}
@@ -133,6 +153,15 @@ func (m *OpenTelemetryMetricsCollector) getOrCreateHistogram(name string) (metri
 }
 
 func (m *OpenTelemetryMetricsCollector) getOrCreateGauge(name string) (metric.Float64UpDownCounter, error) {
+	m.mu.RLock()
+	if gauge, exists := m.gauges[name]; exists {
+		m.mu.RUnlock()
+		return gauge, nil
+	}
+	m.mu.RUnlock()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if gauge, exists := m.gauges[name]; exists {
 		return gauge, nil
 	}

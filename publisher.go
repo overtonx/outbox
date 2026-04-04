@@ -88,7 +88,7 @@ func NewKafkaPublisherFromProducer(logger *zap.Logger, producer *kafka.Producer,
 	return p
 }
 
-func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
+func (p *KafkaPublisher) Publish(ctx context.Context, event EventRecord) error {
 	topic := event.Topic
 	if topic == "" {
 		topic = p.config.Topic
@@ -108,7 +108,30 @@ func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord) error {
 		Timestamp:      time.Now(),
 	}
 
-	return p.producer.Produce(message, nil)
+	deliveryChan := make(chan kafka.Event, 1)
+	if err := p.producer.Produce(message, deliveryChan); err != nil {
+		return fmt.Errorf("failed to enqueue message to kafka: %w", err)
+	}
+
+	select {
+	case e := <-deliveryChan:
+		msg, ok := e.(*kafka.Message)
+		if !ok {
+			return fmt.Errorf("unexpected delivery event type: %T", e)
+		}
+		if msg.TopicPartition.Error != nil {
+			return fmt.Errorf("kafka delivery failed: %w", msg.TopicPartition.Error)
+		}
+		p.logger.Debug("Event delivered to Kafka",
+			zap.String("event_id", event.EventID),
+			zap.String("topic", topic),
+			zap.Int32("partition", msg.TopicPartition.Partition),
+			zap.Any("offset", msg.TopicPartition.Offset),
+		)
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("context cancelled waiting for kafka delivery: %w", ctx.Err())
+	}
 }
 
 func (p *KafkaPublisher) Close() error {

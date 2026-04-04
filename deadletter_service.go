@@ -103,6 +103,7 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 	`
 
 	movedCount := 0
+	movedIDs := make([]int64, 0, len(eventsToMove))
 	for _, event := range eventsToMove {
 		_, err := tx.ExecContext(ctx, insertQuery,
 			event.ID,
@@ -123,17 +124,18 @@ func (s *DeadLetterServiceImpl) MoveToDeadLetters(ctx context.Context) error {
 				zap.String("event_id", event.EventID))
 			continue
 		}
+		movedIDs = append(movedIDs, event.ID)
 		movedCount++
 	}
 
-	if len(eventIDs) > 0 {
+	if len(movedIDs) > 0 {
 		deleteQuery := fmt.Sprintf(
 			"DELETE FROM outbox_events WHERE id IN (%s)",
-			placeholders(len(eventIDs)),
+			placeholders(len(movedIDs)),
 		)
 
-		args := make([]interface{}, len(eventIDs))
-		for i, id := range eventIDs {
+		args := make([]interface{}, len(movedIDs))
+		for i, id := range movedIDs {
 			args[i] = id
 		}
 
