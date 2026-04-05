@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/overtonx/outbox/v3/serializer"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -104,6 +105,7 @@ func TestBuildKafkaHeaders(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
+		"content-type":   serializer.ContentTypeJSON,
 	}
 
 	assert.Equal(t, len(expectedHeaders), len(headers))
@@ -134,6 +136,7 @@ func TestBuildKafkaHeadersWithoutTraceInfo(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
+		"content-type":   serializer.ContentTypeJSON,
 	}
 
 	assert.Equal(t, len(expectedHeaders), len(headers))
@@ -143,6 +146,32 @@ func TestBuildKafkaHeadersWithoutTraceInfo(t *testing.T) {
 		assert.True(t, exists, "Unexpected header key: %s", header.Key)
 		assert.Equal(t, expectedValue, string(header.Value), "Header value mismatch")
 	}
+}
+
+func TestBuildKafkaHeaders_ReservedKeysNotOverridden(t *testing.T) {
+	event := EventRecord{
+		EventID:       "real-event-id",
+		EventType:     "real-event-type",
+		AggregateType: "real-aggregate-type",
+		AggregateID:   "real-aggregate-id",
+		// Attacker tries to override system headers via event payload headers
+		Headers: []byte(`{"event_id":"injected","event_type":"injected","content-type":"application/malicious","legit":"value"}`),
+	}
+
+	headers := buildKafkaHeaders(event)
+
+	headerMap := make(map[string][]string)
+	for _, h := range headers {
+		headerMap[h.Key] = append(headerMap[h.Key], string(h.Value))
+	}
+
+	// Reserved keys must appear exactly once with system values
+	assert.Equal(t, []string{"real-event-id"}, headerMap["event_id"], "event_id must not be overridden")
+	assert.Equal(t, []string{"real-event-type"}, headerMap["event_type"], "event_type must not be overridden")
+	assert.Equal(t, []string{serializer.ContentTypeJSON}, headerMap["content-type"], "content-type must not be overridden")
+
+	// Legitimate custom header must pass through
+	assert.Equal(t, []string{"value"}, headerMap["legit"])
 }
 
 func TestBuildKafkaHeadersWithCustomHeaders(t *testing.T) {
@@ -165,6 +194,7 @@ func TestBuildKafkaHeadersWithCustomHeaders(t *testing.T) {
 		"event_type":     "test-event-type",
 		"aggregate_type": "test-aggregate-type",
 		"aggregate_id":   "test-aggregate-id",
+		"content-type":   serializer.ContentTypeJSON,
 		"custom_key":     "custom_value",
 		"another":        "value",
 	}

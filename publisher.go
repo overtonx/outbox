@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
+	"github.com/overtonx/outbox/v3/serializer"
 	"go.uber.org/zap"
 )
 
@@ -181,18 +182,39 @@ func (p *KafkaPublisher) handleDeliveryReports() {
 	}
 }
 
+// reservedKafkaHeaderKeys contains system-level Kafka header keys set by the
+// outbox package. User-provided event headers with these keys are silently
+// dropped to prevent header injection attacks where a crafted event could
+// override system metadata consumed by downstream services.
+var reservedKafkaHeaderKeys = map[string]struct{}{
+	"event_id":       {},
+	"event_type":     {},
+	"aggregate_type": {},
+	"aggregate_id":   {},
+	"content-type":   {},
+}
+
 func buildKafkaHeaders(event EventRecord) []kafka.Header {
+	contentType := event.ContentType
+	if contentType == "" {
+		contentType = serializer.ContentTypeJSON
+	}
+
 	headers := []kafka.Header{
 		{Key: "event_id", Value: []byte(event.EventID)},
 		{Key: "event_type", Value: []byte(event.EventType)},
 		{Key: "aggregate_type", Value: []byte(event.AggregateType)},
 		{Key: "aggregate_id", Value: []byte(event.AggregateID)},
+		{Key: "content-type", Value: []byte(contentType)},
 	}
 
 	if len(event.Headers) > 0 {
 		var eventHeaders map[string]interface{}
 		if err := json.Unmarshal(event.Headers, &eventHeaders); err == nil {
 			for k, v := range eventHeaders {
+				if _, reserved := reservedKafkaHeaderKeys[k]; reserved {
+					continue
+				}
 				headers = append(headers, kafka.Header{Key: k, Value: []byte(fmt.Sprintf("%v", v))})
 			}
 		}

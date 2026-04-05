@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"fmt"
 	"time"
 
 	"go.uber.org/zap"
@@ -26,6 +27,12 @@ type dispatcherOptions struct {
 
 func WithBatchSize(size int) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if size <= 0 {
+			return fmt.Errorf("batch size must be positive, got %d", size)
+		}
+		if size > 10_000 {
+			return fmt.Errorf("batch size must not exceed 10000, got %d", size)
+		}
 		opts.batchSize = size
 		return nil
 	}
@@ -33,6 +40,9 @@ func WithBatchSize(size int) DispatcherOption {
 
 func WithPollInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("poll interval must be positive, got %s", interval)
+		}
 		opts.pollInterval = interval
 		return nil
 	}
@@ -40,6 +50,9 @@ func WithPollInterval(interval time.Duration) DispatcherOption {
 
 func WithMaxAttempts(attempts int) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if attempts <= 0 {
+			return fmt.Errorf("max attempts must be positive, got %d", attempts)
+		}
 		opts.maxAttempts = attempts
 		return nil
 	}
@@ -47,6 +60,9 @@ func WithMaxAttempts(attempts int) DispatcherOption {
 
 func WithDeadLetterInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("dead letter interval must be positive, got %s", interval)
+		}
 		opts.deadLetterInterval = interval
 		return nil
 	}
@@ -54,6 +70,9 @@ func WithDeadLetterInterval(interval time.Duration) DispatcherOption {
 
 func WithStuckEventTimeout(timeout time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if timeout <= 0 {
+			return fmt.Errorf("stuck event timeout must be positive, got %s", timeout)
+		}
 		opts.stuckEventTimeout = timeout
 		return nil
 	}
@@ -61,6 +80,9 @@ func WithStuckEventTimeout(timeout time.Duration) DispatcherOption {
 
 func WithStuckEventCheckInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("stuck event check interval must be positive, got %s", interval)
+		}
 		opts.stuckEventCheckInterval = interval
 		return nil
 	}

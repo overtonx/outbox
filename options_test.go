@@ -16,6 +16,15 @@ func TestWithBatchSize(t *testing.T) {
 	assert.Equal(t, 50, opts.batchSize)
 }
 
+func TestWithBatchSize_Invalid(t *testing.T) {
+	cases := []int{0, -1, -100, 10_001, 1_000_000}
+	for _, size := range cases {
+		opts := &dispatcherOptions{}
+		err := WithBatchSize(size)(opts)
+		assert.Error(t, err, "expected error for batch size %d", size)
+	}
+}
+
 func TestWithPollInterval(t *testing.T) {
 	opts := &dispatcherOptions{}
 	interval := 5 * time.Second
@@ -24,11 +33,25 @@ func TestWithPollInterval(t *testing.T) {
 	assert.Equal(t, interval, opts.pollInterval)
 }
 
+func TestWithPollInterval_Invalid(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		opts := &dispatcherOptions{}
+		assert.Error(t, WithPollInterval(d)(opts), "expected error for interval %s", d)
+	}
+}
+
 func TestWithMaxAttempts(t *testing.T) {
 	opts := &dispatcherOptions{}
 	err := WithMaxAttempts(5)(opts)
 	assert.NoError(t, err)
 	assert.Equal(t, 5, opts.maxAttempts)
+}
+
+func TestWithMaxAttempts_Invalid(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		opts := &dispatcherOptions{}
+		assert.Error(t, WithMaxAttempts(n)(opts), "expected error for max attempts %d", n)
+	}
 }
 
 func TestWithDeadLetterInterval(t *testing.T) {

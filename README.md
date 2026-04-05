@@ -4,14 +4,12 @@
 
 ## Установка
 
-Для установки пакета выполните команду:
-
-```go
-go get github.com/overtonx/outbox/v2
+```bash
+go get github.com/overtonx/outbox/v3
 ```
 
 ## Основной флоу
- 
+
 1.  **Сохранение события**: Вместо прямой отправки сообщения в брокер, сервис сохраняет его как событие (`Event`) в специальную таблицу `outbox_events` в своей базе данных. Это происходит в рамках той же транзакции, что и основная бизнес-логика. Это гарантирует, что событие будет сохранено только в том случае, если бизнес-транзакция успешно завершена.
 2.  **Фоновая обработка**: Отдельный процесс, **Диспетчер (`Dispatcher`)**, периодически опрашивает таблицу `outbox_events` на наличие новых, необработанных событий.
 3.  **Публикация**: Обнаружив новые события, `Dispatcher` с помощью **Публикатора (`Publisher`)** отправляет их в брокер сообщений.
@@ -20,23 +18,157 @@ go get github.com/overtonx/outbox/v2
 
 ## Компоненты
 
--   **`outbox`**: Основной пакет для создания и сохранения событий (`SaveEvent`).
+-   **`Outbox`**: Центральная точка входа. Создаётся через `New(db, serializer)` и предоставляет фабричные методы для `EventStore` и `Dispatcher`.
+-   **`EventStore`**: Сохраняет события в таблицу `outbox_events`, сериализуя payload с помощью настроенного `Serializer`.
+-   **`Serializer`** (`github.com/overtonx/outbox/v3/serializer`): Интерфейс для сериализации payload. Встроены `JSONSerializer` и `ProtoSerializer`. Можно реализовать свой для Avro, MessagePack и других форматов.
 -   **`Dispatcher`**: Ядро системы. Управляет воркерами, которые опрашивают базу данных, обрабатывают и публикуют события, а также выполняют очистку.
 -   **`Publisher`**: Интерфейс для отправки сообщений. По умолчанию предоставляется `KafkaPublisher`. Вы можете реализовать свой собственный `Publisher` для интеграции с другими брокерами (например, RabbitMQ).
--   **Воркеры (`Worker`)**: Фоновые процессы, управляемые `Dispatcher`, для выполнения конкретных задач:
+-   **Воркеры (`Worker`)**: Фоновые процессы, управляемые `Dispatcher`:
     -   `EventProcessor`: Обрабатывает и публикует новые события.
     -   `DeadLetterService`: Перемещает неисправимые события в DLQ.
-    -   `StuckEventService`: Восстанавливает "зависшие" события, которые находились в обработке слишком долго.
+    -   `StuckEventService`: Восстанавливает "зависшие" события.
     -   `CleanupService`: Удаляет старые обработанные события и записи из DLQ.
+
+## Быстрый старт
+
+```go
+import (
+    "github.com/overtonx/outbox/v3"
+    "github.com/overtonx/outbox/v3/serializer"
+)
+
+// 1. Создание фасада с выбором сериализатора
+ob := outbox.New(db, serializer.JSONSerializer{})
+
+// 2. Сохранение события внутри бизнес-транзакции
+tx, _ := db.BeginTx(ctx, nil)
+
+store := ob.EventStore()
+err := store.Save(ctx, tx, outbox.Event{
+    EventType:     "order.created",
+    AggregateType: "order",
+    AggregateID:   "order-123",
+    Topic:         "orders",
+    Payload:       orderData,
+})
+if err != nil {
+    tx.Rollback()
+    return err
+}
+tx.Commit()
+
+// 3. Запуск диспетчера в фоне
+dispatcher, err := ob.Dispatcher(
+    outbox.WithPublisher(kafkaPublisher),
+    outbox.WithPollInterval(5 * time.Second),
+)
+if err != nil {
+    return err
+}
+go dispatcher.Start(context.Background())
+```
+
+## Схема базы данных
+
+```sql
+CREATE TABLE outbox_events (
+    id                BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    event_id          VARCHAR(36)  NOT NULL UNIQUE,
+    event_type        VARCHAR(255) NOT NULL,
+    aggregate_type    VARCHAR(255) NOT NULL,
+    aggregate_id      VARCHAR(255) NOT NULL,
+    topic             VARCHAR(255) NOT NULL DEFAULT '',
+    content_type      VARCHAR(100) NOT NULL DEFAULT 'application/json',
+    payload           LONGBLOB     NOT NULL,
+    headers           JSON         DEFAULT NULL,
+    status            VARCHAR(50)  NOT NULL DEFAULT 'new',
+    attempts          INT          NOT NULL DEFAULT 0,
+    last_attempted_at DATETIME     DEFAULT NULL,
+    next_attempt_at   DATETIME     DEFAULT NULL,
+    created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE outbox_deadletters (
+    id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    event_id       VARCHAR(36)  NOT NULL,
+    event_type     VARCHAR(255) NOT NULL,
+    aggregate_type VARCHAR(255) NOT NULL,
+    aggregate_id   VARCHAR(255) NOT NULL,
+    topic          VARCHAR(255) NOT NULL DEFAULT '',
+    content_type   VARCHAR(100) NOT NULL DEFAULT 'application/json',
+    payload        LONGBLOB     NOT NULL,
+    headers        JSON         DEFAULT NULL,
+    attempts       INT          NOT NULL DEFAULT 0,
+    last_error     TEXT         DEFAULT NULL,
+    created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+## Сериализация
+
+`Outbox` использует интерфейс `serializer.Serializer` для преобразования payload перед записью в БД. Тип сериализации сохраняется в колонке `content_type` и передаётся потребителям Kafka через заголовок `content-type`.
+
+### Доступные сериализаторы
+
+Пакет: `github.com/overtonx/outbox/v3/serializer`
+
+| Тип                | `content_type`         | Описание                        |
+|--------------------|------------------------|---------------------------------|
+| `JSONSerializer`   | `application/json`     | JSON-кодирование (по умолчанию) |
+| `ProtoSerializer`  | `application/protobuf` | Protobuf binary encoding        |
+
+### JSONSerializer
+
+```go
+import "github.com/overtonx/outbox/v3/serializer"
+
+ob := outbox.New(db, serializer.JSONSerializer{})
+```
+
+### ProtoSerializer
+
+Payload должен реализовывать `proto.Message`.
+
+```go
+import "github.com/overtonx/outbox/v3/serializer"
+
+ob := outbox.New(db, serializer.ProtoSerializer{})
+store := ob.EventStore()
+err := store.Save(ctx, tx, outbox.Event{
+    EventType:     "order.created",
+    AggregateType: "order",
+    AggregateID:   "order-1",
+    Topic:         "orders",
+    Payload:       myProtoMessage, // proto.Message
+})
+```
+
+Потребители Kafka получат заголовок `content-type: application/protobuf` и смогут выбрать нужный десериализатор.
+
+### Свой сериализатор
+
+Реализуйте интерфейс `serializer.Serializer` для любого другого формата:
+
+```go
+import "github.com/overtonx/outbox/v3/serializer"
+
+type AvroSerializer struct{ schema string }
+
+func (s AvroSerializer) Marshal(v interface{}) ([]byte, error) {
+    // avro-кодирование
+}
+
+func (s AvroSerializer) ContentType() string { return "application/avro" }
+
+// Использование
+ob := outbox.New(db, AvroSerializer{schema: "..."})
+```
 
 ## Конфигурация Диспетчера (`Dispatcher`)
 
-Диспетчер создается с помощью `NewDispatcher` и настраивается через функциональные опции (`DispatcherOption`).
-
 ```go
-// Пример создания с опциями
-dispatcher, err := outbox.NewDispatcher(
-    db, // *sql.DB
+dispatcher, err := ob.Dispatcher(
     outbox.WithPollInterval(5 * time.Second),
     outbox.WithMaxAttempts(5),
     outbox.WithPublisher(myCustomPublisher),
@@ -45,25 +177,24 @@ if err != nil {
     // ...
 }
 
-// Запуск диспетчера
 go dispatcher.Start(context.Background())
 ```
 
-### Основные опции `Dispatcher`:
+### Опции `Dispatcher`:
 
--   `WithPollInterval(time.Duration)`: Интервал опроса таблицы `outbox_events` на наличие новых событий. (По умолчанию: 2 секунды)
--   `WithBatchSize(int)`: Максимальное количество событий, запрашиваемых из БД за один раз. (По умолчанию: 100)
--   `WithMaxAttempts(int)`: Максимальное количество попыток отправки события. (По умолчанию: 3)
--   `WithBackoffStrategy(BackoffStrategy)`: Стратегия вычисления задержки между повторными попытками.
--   `WithPublisher(Publisher)`: Позволяет указать собственную реализацию `Publisher`.
+-   `WithPollInterval(time.Duration)`: Интервал опроса таблицы `outbox_events`. (По умолчанию: 2 секунды)
+-   `WithBatchSize(int)`: Количество событий за один запрос. Диапазон: 1–10000. (По умолчанию: 100)
+-   `WithMaxAttempts(int)`: Максимальное количество попыток отправки. (По умолчанию: 3)
+-   `WithBackoffStrategy(BackoffStrategy)`: Стратегия задержки между повторными попытками.
+-   `WithPublisher(Publisher)`: Собственная реализация `Publisher`.
+-   `WithKafkaConfig(KafkaConfig)`: Создаёт `KafkaPublisher` с переданной конфигурацией.
 -   `WithLogger(*zap.Logger)`: Настройка логирования.
--   `WithStuckEventTimeout(time.Duration)`: Время, по истечении которого событие в статусе "в обработке" считается "зависшим". (По умолчанию: 10 минут)
+-   `WithMetrics(MetricsCollector)`: Подключение коллектора метрик (например, OpenTelemetry).
+-   `WithStuckEventTimeout(time.Duration)`: Время, после которого событие в статусе "в обработке" считается зависшим. (По умолчанию: 10 минут)
 -   `WithCleanupInterval(time.Duration)`: Интервал запуска воркера очистки. (По умолчанию: 1 час)
--   `WithSentEventsRetention(time.Duration)`: Как долго хранить успешно отправленные события. (По умолчанию: 24 часа)
+-   `WithSentEventsRetention(time.Duration)`: Время хранения успешно отправленных событий. (По умолчанию: 24 часа)
 
-## Конфигурация `Publisher`
-
-По умолчанию используется `KafkaPublisher`. Его можно тонко настроить с помощью `NewKafkaPublisherWithConfig`.
+## Конфигурация `KafkaPublisher`
 
 ```go
 kafkaConfig := outbox.DefaultKafkaConfig()
@@ -75,79 +206,104 @@ if err != nil {
     // ...
 }
 
-// Передача настроенного публикатора в диспетчер
-dispatcher, err := outbox.NewDispatcher(db, outbox.WithPublisher(publisher))
+dispatcher, err := ob.Dispatcher(outbox.WithPublisher(publisher))
 ```
 
 ### Опции `KafkaConfig`:
 
--   `Topic (string)`: Имя топика по умолчанию, которое будет использоваться, если топик не указан в самом событии.
--   `ProducerProps (kafka.ConfigMap)`: Карта для настройки нативного Kafka-продюсера из `confluent-kafka-go`. Позволяет задавать любые параметры, такие как `bootstrap.servers`, `acks`, `compression.type` и т.д.
--   `HeaderBuilder (KafkaHeaderBuilder)`: Функция для создания заголовков Kafka-сообщения.
+-   `Topic`: Топик по умолчанию (используется, если топик не задан в событии).
+-   `ProducerProps`: Параметры нативного Kafka-продюсера (`confluent-kafka-go`): `bootstrap.servers`, `acks`, `compression.type` и т.д.
+-   `HeaderBuilder`: Функция для создания заголовков Kafka-сообщения.
 
-### Зачем нужен `Headers Builder`?
+### Заголовки Kafka
 
-`Headers Builder` (`KafkaHeaderBuilder`) — это функция, которая преобразует метаданные события (`event_id`, `event_type`, `aggregate_id`, `trace_id` и т.д.) в нативные заголовки Kafka-сообщения.
+Каждое сообщение автоматически получает заголовки: `event_id`, `event_type`, `aggregate_type`, `aggregate_id`, `content-type`. Дополнительные заголовки передаются через `Event.Headers`.
 
-**Пример пользовательского конструктора заголовков:**
+Системные заголовки защищены от переопределения пользовательскими данными.
+
+**Пример пользовательского `HeaderBuilder`:**
 
 ```go
-func myCustomHeaderBuilder(record outbox.EventRecord) []kafka.Header {
-    // Начинаем с заголовков по умолчанию
+func myHeaderBuilder(record outbox.EventRecord) []kafka.Header {
     headers := outbox.BuildKafkaHeaders(record)
-
-    // Добавляем пользовательский заголовок
     headers = append(headers, kafka.Header{
-        Key: "X-Custom-Header",
+        Key:   "X-Custom-Header",
         Value: []byte("my-value"),
     })
-
     return headers
 }
 
-// Затем назначаем его в конфигурации
 kafkaConfig := outbox.KafkaConfig{
-    // ...
-    HeaderBuilder: myCustomHeaderBuilder,
+    HeaderBuilder: myHeaderBuilder,
 }
 ```
 
 ## Публикация сообщений и выбор топика
 
-Логика выбора топика для публикации сообщения следующая:
-
-1.  **Приоритет у события**: Если при создании события (`NewOutboxEvent`) вы указали конкретный топик, сообщение будет отправлено именно в него.
+1.  **Приоритет у события**: если `Topic` задан в событии, сообщение идёт в него.
 
     ```go
-    // Сообщение будет отправлено в топик "user-events"
-    event, _ := NewOutboxEvent(..., "user-events", payload)
-    SaveEvent(ctx, tx, event)
+    store.Save(ctx, tx, outbox.Event{Topic: "user-events", Payload: data, ...})
     ```
 
-2.  **Топик по умолчанию**: Если при создании события поле `Topic` осталось пустым, будет использован топик по умолчанию, заданный в `KafkaConfig.Topic` при конфигурации `KafkaPublisher`.
+2.  **Топик по умолчанию**: если `Topic` пустой, используется `KafkaConfig.Topic`.
 
-    ```go
-    // Topic не указан, будет использован топик из KafkaConfig
-    event, _ := NewOutboxEvent(..., "", payload)
-    SaveEvent(ctx, tx, event)
-    ```
+## Миграция с v2 на v3
 
-Такой подход обеспечивает гибкость: вы можете как направлять все события в один общий топик, так и маршрутизировать их по разным топикам в зависимости от бизнес-логики.
+### Установка
 
-## Миграция с v1 на v2
+```bash
+go get github.com/overtonx/outbox/v3
+```
 
-В версии v2 изменилась схема таблицы `outbox_events` и `outbox_deadletters`. Поля `trace_id` и `span_id` были заменены одним универсальным полем `headers` типа `JSON` для большей гибкости при хранении метаданных.
+Замените импорты:
 
-Для ручного обновления схемы базы данных (на примере MySQL) выполните следующие запросы:
+```go
+// было
+import "github.com/overtonx/outbox/v2"
 
-1.  **Добавьте колонки `headers`:**
-    ```sql
-    ALTER TABLE outbox_events ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
-    ALTER TABLE outbox_deadletters ADD COLUMN headers JSON DEFAULT NULL AFTER payload;
-    ```
+// стало
+import (
+    "github.com/overtonx/outbox/v3"
+    "github.com/overtonx/outbox/v3/serializer"
+)
+```
 
-2.  **Удалите старые колонки:**
-    ```sql
-    ALTER TABLE outbox_events DROP COLUMN trace_id, DROP COLUMN span_id;
-    ALTER TABLE outbox_deadletters DROP COLUMN trace_id, DROP COLUMN span_id;
-    ```
+### Изменения схемы БД
+
+Колонка `payload` переведена из `JSON` в `LONGBLOB`. Добавлена колонка `content_type`.
+
+```sql
+ALTER TABLE outbox_events
+    MODIFY COLUMN payload LONGBLOB NOT NULL,
+    ADD COLUMN content_type VARCHAR(100) NOT NULL DEFAULT 'application/json' AFTER topic;
+
+ALTER TABLE outbox_deadletters
+    MODIFY COLUMN payload LONGBLOB NOT NULL,
+    ADD COLUMN content_type VARCHAR(100) NOT NULL DEFAULT 'application/json' AFTER topic;
+```
+
+> **Важно:** выполните миграцию в обслуживающем окне. После изменения типа `payload` откат потребует повторного преобразования данных.
+
+### Изменения API
+
+**Было (v2):**
+
+```go
+err := outbox.SaveEvent(ctx, tx, event)
+
+dispatcher, err := outbox.NewDispatcher(db, outbox.WithLogger(logger))
+```
+
+**Стало (v3):**
+
+```go
+ob := outbox.New(db, serializer.JSONSerializer{})
+
+store := ob.EventStore()
+err := store.Save(ctx, tx, event)
+
+dispatcher, err := ob.Dispatcher(outbox.WithLogger(logger))
+```
+
+`SaveEvent` продолжает работать — ломающих изменений нет, но функция будет удалена в v4.
