@@ -26,69 +26,100 @@ type dispatcherOptions struct {
 
 func WithBatchSize(size int) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.batchSize = size
+		if size > 0 {
+			opts.batchSize = size
+		}
+
 		return nil
 	}
 }
 
 func WithPollInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.pollInterval = interval
+		if interval > 0 {
+			opts.pollInterval = interval
+		}
+
 		return nil
 	}
 }
 
 func WithMaxAttempts(attempts int) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.maxAttempts = attempts
+		if attempts > 0 {
+			opts.maxAttempts = attempts
+		}
+
 		return nil
 	}
 }
 
 func WithDeadLetterInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.deadLetterInterval = interval
+		if interval > 0 {
+			opts.deadLetterInterval = interval
+		}
+
 		return nil
 	}
 }
 
 func WithStuckEventTimeout(timeout time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.stuckEventTimeout = timeout
+		if timeout > 0 {
+			opts.stuckEventTimeout = timeout
+		}
+
 		return nil
 	}
 }
 
 func WithStuckEventCheckInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.stuckEventCheckInterval = interval
+		if interval > 0 {
+			opts.stuckEventCheckInterval = interval
+		}
+
 		return nil
 	}
 }
 
 func WithDeadLetterRetention(retention time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.deadLetterRetention = retention
+		if retention > 0 {
+			opts.deadLetterRetention = retention
+		}
+
 		return nil
 	}
 }
 
 func WithSentEventsRetention(retention time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.sentEventsRetention = retention
+		if retention > 0 {
+			opts.sentEventsRetention = retention
+		}
+
 		return nil
 	}
 }
 
 func WithCleanupInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.cleanupInterval = interval
+		if interval > 0 {
+			opts.cleanupInterval = interval
+		}
+
 		return nil
 	}
 }
 
 func WithBackoffStrategy(strategy BackoffStrategy) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
+		if strategy == nil {
+			strategy = DefaultBackoffStrategy()
+		}
+
 		opts.backoffStrategy = strategy
 		return nil
 	}
@@ -110,7 +141,10 @@ func WithMetrics(metrics MetricsCollector) DispatcherOption {
 
 func WithLogger(logger *zap.Logger) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		opts.logger = logger
+		if logger != nil {
+			opts.logger = logger
+		}
+
 		return nil
 	}
 }
