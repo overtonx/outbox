@@ -269,3 +269,63 @@ func TestEventStore_SaveCtx_UsesTxFromContext(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, mock_.ExpectationsWereMet())
 }
+
+func TestEventStore_WithMapper_TransformsEvent(t *testing.T) {
+	ctx := context.Background()
+	executor := new(MockDBExecutor)
+
+	var capturedArgs []interface{}
+	executor.On("ExecContext", ctx, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			capturedArgs = args.Get(2).([]interface{})
+		}).
+		Return(nil, nil).Once()
+
+	store := NewEventStore(serializer.JSONSerializer{}).
+		WithMapper(func(e Event) Event {
+			e.EventType = "mapped.event"
+			return e
+		})
+
+	event := Event{
+		EventType:     "original.event",
+		AggregateType: "order",
+		AggregateID:   "order-1",
+		Topic:         "orders",
+		Payload:       "payload",
+	}
+
+	err := store.SaveWithDB(ctx, executor, event)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "mapped.event", capturedArgs[1], "event_type should be transformed by mapper")
+	executor.AssertExpectations(t)
+}
+
+func TestEventStore_WithMapper_Nil(t *testing.T) {
+	ctx := context.Background()
+	executor := new(MockDBExecutor)
+
+	var capturedArgs []interface{}
+	executor.On("ExecContext", ctx, mock.Anything, mock.Anything).
+		Run(func(args mock.Arguments) {
+			capturedArgs = args.Get(2).([]interface{})
+		}).
+		Return(nil, nil).Once()
+
+	store := NewEventStore(serializer.JSONSerializer{})
+
+	event := Event{
+		EventType:     "order.created",
+		AggregateType: "order",
+		AggregateID:   "order-1",
+		Topic:         "orders",
+		Payload:       "payload",
+	}
+
+	err := store.SaveWithDB(ctx, executor, event)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "order.created", capturedArgs[1], "event_type should be unchanged without mapper")
+	executor.AssertExpectations(t)
+}

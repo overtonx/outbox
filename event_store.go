@@ -11,11 +11,29 @@ import (
 	"github.com/overtonx/outbox/v3/serializer"
 )
 
+// EventMapper преобразует Event перед сохранением в outbox.
+// Вызывается после инъекции трассировочного контекста и до сериализации.
+type EventMapper func(Event) Event
+
+// outboxRow содержит поля события, готовые для передачи в SQL-INSERT:
+// payload и headers уже сериализованы в []byte.
+type outboxRow struct {
+	eventID       string
+	eventType     string
+	aggregateType string
+	aggregateID   string
+	topic         string
+	contentType   string
+	payload       []byte
+	headers       []byte
+}
+
 // EventStore сохраняет события в таблицу outbox с использованием настроенного Serializer.
 type EventStore struct {
 	serializer serializer.Serializer
 	db         *sql.DB
 	getter     *trmsql.CtxGetter
+	mapper     EventMapper
 }
 
 // NewEventStore создаёт EventStore с указанным Serializer.
@@ -53,6 +71,12 @@ func (s *EventStore) Save(ctx context.Context, event Event) error {
 	return s.save(ctx, exec, event)
 }
 
+// WithMapper устанавливает маппер событий и возвращает EventStore для chaining.
+func (s *EventStore) WithMapper(fn EventMapper) *EventStore {
+	s.mapper = fn
+	return s
+}
+
 func (s *EventStore) save(ctx context.Context, exec DBExecutor, event Event) error {
 	if event.EventID == "" {
 		id, _ := uuid.NewV7()
@@ -65,42 +89,64 @@ func (s *EventStore) save(ctx context.Context, exec DBExecutor, event Event) err
 
 	injectTraceContext(ctx, &event)
 
-	if err := s.insertEvent(ctx, exec, event); err != nil {
+	if s.mapper != nil {
+		event = s.mapper(event)
+	}
+
+	row, err := s.serialize(event)
+	if err != nil {
+		return fmt.Errorf("failed to save outbox event: %w", err)
+	}
+
+	if err := s.insertEvent(ctx, exec, row); err != nil {
 		return fmt.Errorf("failed to save outbox event: %w", convertFromDBError(err))
 	}
 
 	return nil
 }
 
-func (s *EventStore) insertEvent(ctx context.Context, exec DBExecutor, event Event) error {
+func (s *EventStore) serialize(event Event) (outboxRow, error) {
 	payloadBytes, err := s.serializer.Marshal(event.Payload)
 	if err != nil {
-		return fmt.Errorf("failed to serialize payload: %w", err)
+		return outboxRow{}, fmt.Errorf("failed to serialize payload: %w", err)
 	}
 
 	var headersJSON []byte
 	if len(event.Headers) > 0 {
 		headersJSON, err = json.Marshal(event.Headers)
 		if err != nil {
-			return fmt.Errorf("failed to marshal headers: %w", err)
+			return outboxRow{}, fmt.Errorf("failed to marshal headers: %w", err)
 		}
 	}
 
+	return outboxRow{
+		eventID:       event.EventID,
+		eventType:     event.EventType,
+		aggregateType: event.AggregateType,
+		aggregateID:   event.AggregateID,
+		topic:         event.Topic,
+		contentType:   s.serializer.ContentType(),
+		payload:       payloadBytes,
+		headers:       headersJSON,
+	}, nil
+}
+
+func (s *EventStore) insertEvent(ctx context.Context, exec DBExecutor, row outboxRow) error {
 	query := `
 		INSERT INTO outbox_events
 		(event_id, event_type, aggregate_type, aggregate_id, topic, content_type, payload, headers, status)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
 
-	_, err = exec.ExecContext(ctx, query,
-		event.EventID,
-		event.EventType,
-		event.AggregateType,
-		event.AggregateID,
-		event.Topic,
-		s.serializer.ContentType(),
-		payloadBytes,
-		headersJSON,
+	_, err := exec.ExecContext(ctx, query,
+		row.eventID,
+		row.eventType,
+		row.aggregateType,
+		row.aggregateID,
+		row.topic,
+		row.contentType,
+		row.payload,
+		row.headers,
 		EventRecordStatusNew,
 	)
 

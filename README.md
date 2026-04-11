@@ -19,7 +19,7 @@ go get github.com/overtonx/outbox/v3
 ## Компоненты
 
 -   **`Outbox`**: Центральная точка входа. Создаётся через `New(db, serializer)` и предоставляет фабричные методы для `EventStore` и `Dispatcher`.
--   **`EventStore`**: Сохраняет события в таблицу `outbox_events`, сериализуя payload с помощью настроенного `Serializer`.
+-   **`EventStore`**: Сохраняет события в таблицу `outbox_events`, сериализуя payload с помощью настроенного `Serializer`. Поддерживает опциональный `EventMapper` для преобразования события перед сохранением (`WithMapper`).
 -   **`Serializer`** (`github.com/overtonx/outbox/v3/serializer`): Интерфейс для сериализации payload. Встроены `JSONSerializer` и `ProtoSerializer`. Можно реализовать свой для Avro, MessagePack и других форматов.
 -   **`Dispatcher`**: Ядро системы. Управляет воркерами, которые опрашивают базу данных, обрабатывают и публикуют события, а также выполняют очистку.
 -   **`Publisher`**: Интерфейс для отправки сообщений. По умолчанию предоставляется `KafkaPublisher`. Вы можете реализовать свой собственный `Publisher` для интеграции с другими брокерами (например, RabbitMQ).
@@ -44,7 +44,7 @@ ob := outbox.New(db, serializer.JSONSerializer{})
 tx, _ := db.BeginTx(ctx, nil)
 
 store := ob.EventStore()
-err := store.Save(ctx, tx, outbox.Event{
+err := store.SaveWithDB(ctx, tx, outbox.Event{
     EventType:     "order.created",
     AggregateType: "order",
     AggregateID:   "order-123",
@@ -70,39 +70,41 @@ go dispatcher.Start(context.Background())
 
 ## Схема базы данных
 
-```sql
-CREATE TABLE outbox_events (
-    id                BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    event_id          VARCHAR(36)  NOT NULL UNIQUE,
-    event_type        VARCHAR(255) NOT NULL,
-    aggregate_type    VARCHAR(255) NOT NULL,
-    aggregate_id      VARCHAR(255) NOT NULL,
-    topic             VARCHAR(255) NOT NULL DEFAULT '',
-    content_type      VARCHAR(100) NOT NULL DEFAULT 'application/json',
-    payload           LONGBLOB     NOT NULL,
-    headers           JSON         DEFAULT NULL,
-    status            VARCHAR(50)  NOT NULL DEFAULT 'new',
-    attempts          INT          NOT NULL DEFAULT 0,
-    last_attempted_at DATETIME     DEFAULT NULL,
-    next_attempt_at   DATETIME     DEFAULT NULL,
-    created_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
+Таблицы создаются автоматически при инициализации `Dispatcher`. Актуальная схема:
 
-CREATE TABLE outbox_deadletters (
-    id             BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    event_id       VARCHAR(36)  NOT NULL,
-    event_type     VARCHAR(255) NOT NULL,
-    aggregate_type VARCHAR(255) NOT NULL,
-    aggregate_id   VARCHAR(255) NOT NULL,
-    topic          VARCHAR(255) NOT NULL DEFAULT '',
-    content_type   VARCHAR(100) NOT NULL DEFAULT 'application/json',
-    payload        LONGBLOB     NOT NULL,
-    headers        JSON         DEFAULT NULL,
-    attempts       INT          NOT NULL DEFAULT 0,
-    last_error     TEXT         DEFAULT NULL,
-    created_at     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+```sql
+CREATE TABLE IF NOT EXISTS outbox_events (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    event_id        CHAR(36)     NOT NULL UNIQUE,
+    event_type      VARCHAR(255) NOT NULL,
+    aggregate_type  VARCHAR(255) NOT NULL,
+    aggregate_id    VARCHAR(255) NOT NULL,
+    status          INT          NOT NULL DEFAULT 0, -- 0=new, 1=sent, 2=retry, 3=error, 4=processing
+    topic           VARCHAR(255) NOT NULL,
+    content_type    VARCHAR(100) NOT NULL DEFAULT 'application/json',
+    payload         LONGBLOB     NOT NULL,
+    headers         JSON         NULL,
+    attempt_count   INT          NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP    NULL,
+    last_error      TEXT         NULL,
+    created_at      TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at      TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS outbox_deadletters (
+    id             BIGINT PRIMARY KEY,
+    event_id       CHAR(36)      NOT NULL UNIQUE,
+    event_type     VARCHAR(255)  NOT NULL,
+    aggregate_type VARCHAR(255)  NOT NULL,
+    aggregate_id   VARCHAR(255)  NOT NULL,
+    topic          VARCHAR(255)  NOT NULL,
+    content_type   VARCHAR(100)  NOT NULL DEFAULT 'application/json',
+    payload        LONGBLOB      NOT NULL,
+    headers        JSON          NULL,
+    attempt_count  INT           NOT NULL,
+    last_error     VARCHAR(2000) NULL,
+    created_at     TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 ```
 
 ## Сериализация
@@ -164,6 +166,38 @@ func (s AvroSerializer) ContentType() string { return "application/avro" }
 // Использование
 ob := outbox.New(db, AvroSerializer{schema: "..."})
 ```
+
+## Маппер событий (`EventMapper`)
+
+`EventMapper` — опциональный хук, который позволяет преобразовать `Event` непосредственно перед его сериализацией и записью в БД. Удобен для обогащения заголовков, нормализации полей или добавления сквозных метаданных без изменения бизнес-кода.
+
+Маппер вызывается **после** инъекции трассировочного контекста и **до** сериализации payload.
+
+```go
+// EventMapper — это функция вида func(Event) Event.
+store := outbox.NewEventStore(serializer.JSONSerializer{}).
+    WithMapper(func(e outbox.Event) outbox.Event {
+        if e.Headers == nil {
+            e.Headers = make(map[string]string)
+        }
+        e.Headers["x-source"] = "payment-service"
+        e.Headers["x-env"]    = os.Getenv("APP_ENV")
+        return e
+    })
+```
+
+Через фасад `Outbox`:
+
+```go
+ob := outbox.New(db, serializer.JSONSerializer{})
+store := ob.EventStore().WithMapper(func(e outbox.Event) outbox.Event {
+    e.EventType = strings.ToLower(e.EventType)
+    return e
+})
+```
+
+`WithMapper` возвращает тот же `*EventStore`, поэтому вызовы можно цепочкой.
+Если маппер не задан, поведение не изменяется.
 
 ## Конфигурация Диспетчера (`Dispatcher`)
 
@@ -301,7 +335,7 @@ dispatcher, err := outbox.NewDispatcher(db, outbox.WithLogger(logger))
 ob := outbox.New(db, serializer.JSONSerializer{})
 
 store := ob.EventStore()
-err := store.Save(ctx, tx, event)
+err := store.SaveWithDB(ctx, tx, event)
 
 dispatcher, err := ob.Dispatcher(outbox.WithLogger(logger))
 ```
