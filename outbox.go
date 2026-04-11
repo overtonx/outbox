@@ -61,7 +61,7 @@ func injectTraceContext(ctx context.Context, event *Event) {
 // Устарело: используйте EventStore.Save с явным Serializer.
 // SaveEvent будет удалён в следующей мажорной версии.
 func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
-	return NewEventStore(serializer.JSONSerializer{}).Save(ctx, exec, event)
+	return NewEventStore(serializer.JSONSerializer{}).SaveWithDB(ctx, exec, event)
 }
 
 func convertFromDBError(err error) error {

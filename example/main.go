@@ -143,7 +143,7 @@ func createSampleEvents(ctx context.Context, db *sql.DB, ob *outbox.Outbox, logg
 	}
 
 	for _, event := range events {
-		if err := store.Save(ctx, tx, event); err != nil {
+		if err := store.SaveWithDB(ctx, tx, event); err != nil {
 			logger.Error("Failed to save outbox event",
 				zap.String("event_id", event.EventID),
 				zap.Error(err))

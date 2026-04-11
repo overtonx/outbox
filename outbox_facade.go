@@ -25,7 +25,7 @@ func New(db *sql.DB, s serializer.Serializer) *Outbox {
 }
 
 // EventStore возвращает EventStore, использующий сериализатор и db из Outbox.
-// SaveCtx может использоваться для получения исполнителя из контекста через go-transaction-manager.
+// Save может использоваться для получения исполнителя из контекста через go-transaction-manager.
 func (o *Outbox) EventStore() *EventStore {
 	return NewEventStoreWithDB(o.db, o.serializer)
 }

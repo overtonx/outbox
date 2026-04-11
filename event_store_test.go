@@ -29,7 +29,7 @@ func TestEventStore_Save_Success(t *testing.T) {
 		Payload:       map[string]string{"id": "order-1"},
 	}
 
-	err := store.Save(ctx, executor, event)
+	err := store.SaveWithDB(ctx, executor, event)
 
 	assert.NoError(t, err)
 	executor.AssertExpectations(t)
@@ -55,7 +55,7 @@ func TestEventStore_Save_AutoGeneratesEventID(t *testing.T) {
 		Payload:       "payload",
 	}
 
-	err := store.Save(ctx, executor, event)
+	err := store.SaveWithDB(ctx, executor, event)
 
 	assert.NoError(t, err)
 	// First arg in ExecContext is the event_id — must be non-empty
@@ -76,7 +76,7 @@ func TestEventStore_Save_SerializationError(t *testing.T) {
 		Payload:       make(chan int), // channels cannot be JSON-serialized
 	}
 
-	err := store.Save(ctx, executor, event)
+	err := store.SaveWithDB(ctx, executor, event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to serialize payload")
@@ -112,7 +112,7 @@ func TestEventStore_Save_ValidationError(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			err := store.Save(ctx, executor, tc.event)
+			err := store.SaveWithDB(ctx, executor, tc.event)
 			assert.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantMsg)
 		})
@@ -136,7 +136,7 @@ func TestEventStore_Save_DuplicateKeyError(t *testing.T) {
 		Payload:       "payload",
 	}
 
-	err := store.Save(ctx, executor, event)
+	err := store.SaveWithDB(ctx, executor, event)
 
 	assert.Error(t, err)
 	assert.True(t, errors.Is(err, ErrEventAlreadyExists))
@@ -159,7 +159,7 @@ func TestEventStore_Save_GenericDBError(t *testing.T) {
 		Payload:       "payload",
 	}
 
-	err := store.Save(ctx, executor, event)
+	err := store.SaveWithDB(ctx, executor, event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "failed to save outbox event")
@@ -190,7 +190,7 @@ func TestEventStore_Save_ContentTypeInQuery(t *testing.T) {
 		Payload:       "payload",
 	}
 
-	err := store.Save(ctx, executor, event)
+	err := store.SaveWithDB(ctx, executor, event)
 
 	assert.NoError(t, err)
 	assert.Contains(t, capturedQuery, "content_type")
@@ -208,7 +208,7 @@ func TestEventStore_SaveCtx_NoDB(t *testing.T) {
 		Payload:       "payload",
 	}
 
-	err := store.SaveCtx(context.Background(), event)
+	err := store.Save(context.Background(), event)
 
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "no db configured")
@@ -231,7 +231,7 @@ func TestEventStore_SaveCtx_FallsBackToOwnDB(t *testing.T) {
 	}
 
 	// No transaction in context — should fall back to the provided *sql.DB.
-	err = store.SaveCtx(context.Background(), event)
+	err = store.Save(context.Background(), event)
 
 	assert.NoError(t, err)
 	assert.NoError(t, mock_.ExpectationsWereMet())
@@ -263,7 +263,7 @@ func TestEventStore_SaveCtx_UsesTxFromContext(t *testing.T) {
 	}
 
 	err = trManager.Do(context.Background(), func(ctx context.Context) error {
-		return store.SaveCtx(ctx, event)
+		return store.Save(ctx, event)
 	})
 
 	assert.NoError(t, err)

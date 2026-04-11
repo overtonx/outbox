@@ -36,16 +36,16 @@ func NewEventStoreWithDB(db *sql.DB, s serializer.Serializer, getter ...*trmsql.
 	return &EventStore{serializer: s, db: db, getter: g}
 }
 
-// Save сериализует полезную нагрузку события с помощью настроенного Serializer и вставляет
+// SaveWithDB сериализует полезную нагрузку события с помощью настроенного Serializer и вставляет
 // событие в таблицу outbox. exec может быть *sql.DB или *sql.Tx.
-func (s *EventStore) Save(ctx context.Context, exec DBExecutor, event Event) error {
+func (s *EventStore) SaveWithDB(ctx context.Context, exec DBExecutor, event Event) error {
 	return s.save(ctx, exec, event)
 }
 
-// SaveCtx получает исполнителя из ctx через go-transaction-manager.
+// Save получает исполнителя из ctx через go-transaction-manager.
 // При отсутствии активной транзакции в ctx используется db,
 // переданный в NewEventStoreWithDB. Возвращает ошибку, если db не настроен.
-func (s *EventStore) SaveCtx(ctx context.Context, event Event) error {
+func (s *EventStore) Save(ctx context.Context, event Event) error {
 	if s.getter == nil || s.db == nil {
 		return fmt.Errorf("outbox: EventStore has no db configured; use NewEventStoreWithDB or call Save with an explicit executor")
 	}
