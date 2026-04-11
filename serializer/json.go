@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-// JSONSerializer serializes payloads as JSON.
+// JSONSerializer сериализует полезные нагрузки в формат JSON.
 type JSONSerializer struct{}
 
 func (JSONSerializer) Marshal(v interface{}) ([]byte, error) {

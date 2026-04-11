@@ -11,22 +11,23 @@ import (
 	"github.com/overtonx/outbox/v3/serializer"
 )
 
-// EventStore saves events to the outbox table using the configured Serializer.
+// EventStore сохраняет события в таблицу outbox с использованием настроенного Serializer.
 type EventStore struct {
 	serializer serializer.Serializer
 	db         *sql.DB
 	getter     *trmsql.CtxGetter
 }
 
-// NewEventStore creates an EventStore with the given Serializer.
-// Use Save to provide an explicit executor (db or tx).
+// NewEventStore создаёт EventStore с указанным Serializer.
+// Для передачи явного исполнителя (db или tx) используйте Save.
 func NewEventStore(s serializer.Serializer) *EventStore {
 	return &EventStore{serializer: s}
 }
 
-// NewEventStoreWithDB creates an EventStore that can resolve the executor from
-// context via go-transaction-manager, falling back to db when no transaction
-// is active. getter is optional; trmsql.DefaultCtxGetter is used when omitted.
+// NewEventStoreWithDB создаёт EventStore, который может получать исполнителя из
+// контекста через go-transaction-manager, используя db как резервный вариант
+// при отсутствии активной транзакции. getter необязателен; при его отсутствии
+// используется trmsql.DefaultCtxGetter.
 func NewEventStoreWithDB(db *sql.DB, s serializer.Serializer, getter ...*trmsql.CtxGetter) *EventStore {
 	g := trmsql.DefaultCtxGetter
 	if len(getter) > 0 && getter[0] != nil {
@@ -35,15 +36,15 @@ func NewEventStoreWithDB(db *sql.DB, s serializer.Serializer, getter ...*trmsql.
 	return &EventStore{serializer: s, db: db, getter: g}
 }
 
-// Save serializes the event payload with the configured Serializer and inserts
-// the event into the outbox table. exec may be a *sql.DB or *sql.Tx.
+// Save сериализует полезную нагрузку события с помощью настроенного Serializer и вставляет
+// событие в таблицу outbox. exec может быть *sql.DB или *sql.Tx.
 func (s *EventStore) Save(ctx context.Context, exec DBExecutor, event Event) error {
 	return s.save(ctx, exec, event)
 }
 
-// SaveCtx resolves the executor from ctx using go-transaction-manager.
-// When no active transaction is found in ctx it falls back to the db
-// provided to NewEventStoreWithDB. Returns an error if no db was configured.
+// SaveCtx получает исполнителя из ctx через go-transaction-manager.
+// При отсутствии активной транзакции в ctx используется db,
+// переданный в NewEventStoreWithDB. Возвращает ошибку, если db не настроен.
 func (s *EventStore) SaveCtx(ctx context.Context, event Event) error {
 	if s.getter == nil || s.db == nil {
 		return fmt.Errorf("outbox: EventStore has no db configured; use NewEventStoreWithDB or call Save with an explicit executor")

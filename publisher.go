@@ -35,7 +35,7 @@ type KafkaPublisher struct {
 	config   KafkaConfig
 }
 
-// KafkaHeaderBuilder defines a function type for building Kafka message headers from an EventRecord.
+// KafkaHeaderBuilder определяет тип функции для построения заголовков Kafka-сообщения из EventRecord.
 type KafkaHeaderBuilder func(record EventRecord) []kafka.Header
 
 type KafkaConfig struct {
@@ -143,8 +143,8 @@ func (p *KafkaPublisher) Close() error {
 	}
 
 	var flushErr error
-	// Flush blocks until all messages are delivered or the timeout expires.
-	// It returns the number of messages still in the queue.
+	// Flush блокируется до тех пор, пока все сообщения не будут доставлены или не истечёт таймаут.
+	// Возвращает количество сообщений, оставшихся в очереди.
 	if remaining := p.producer.Flush(15 * 1000); remaining > 0 {
 		flushErr = fmt.Errorf("failed to flush kafka producer: %d messages remaining", remaining)
 		p.logger.Error("Failed to flush kafka producer", zap.Error(flushErr))
@@ -152,7 +152,7 @@ func (p *KafkaPublisher) Close() error {
 		p.logger.Info("Successfully flushed kafka producer")
 	}
 
-	// Close the producer to release resources.
+	// Закрываем продюсер для освобождения ресурсов.
 	p.producer.Close()
 
 	return flushErr
@@ -182,10 +182,11 @@ func (p *KafkaPublisher) handleDeliveryReports() {
 	}
 }
 
-// reservedKafkaHeaderKeys contains system-level Kafka header keys set by the
-// outbox package. User-provided event headers with these keys are silently
-// dropped to prevent header injection attacks where a crafted event could
-// override system metadata consumed by downstream services.
+// reservedKafkaHeaderKeys содержит системные ключи заголовков Kafka, устанавливаемые
+// пакетом outbox. Пользовательские заголовки событий с этими ключами молча
+// отбрасываются для предотвращения атак подмены заголовков, при которых специально
+// сформированное событие могло бы перезаписать системные метаданные, потребляемые
+// downstream-сервисами.
 var reservedKafkaHeaderKeys = map[string]struct{}{
 	"event_id":       {},
 	"event_type":     {},

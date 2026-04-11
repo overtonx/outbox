@@ -15,8 +15,8 @@ var (
 	ErrEventAlreadyExists = errors.New("event already exists")
 )
 
-// DBExecutor defines the interface for executing database queries.
-// This allows for using either a *sql.DB or *sql.Tx.
+// DBExecutor определяет интерфейс для выполнения запросов к базе данных.
+// Позволяет использовать как *sql.DB, так и *sql.Tx.
 
 type DBExecutor interface {
 	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
@@ -50,16 +50,16 @@ func NewOutboxEvent(eventID, eventType, aggregateType, aggregateID, topic string
 	return event, nil
 }
 
-// injectTraceContext injects the tracing context from the context into the event headers.
+// injectTraceContext внедряет трассировочный контекст из ctx в заголовки события.
 func injectTraceContext(ctx context.Context, event *Event) {
 	carrier := NewMessageCarrier(event)
 	otel.GetTextMapPropagator().Inject(ctx, carrier)
 }
 
-// SaveEvent saves an event to the outbox table using JSON serialization.
+// SaveEvent сохраняет событие в таблицу outbox с JSON-сериализацией.
 //
-// Deprecated: Use EventStore.Save with an explicit Serializer instead.
-// SaveEvent will be removed in a future major version.
+// Устарело: используйте EventStore.Save с явным Serializer.
+// SaveEvent будет удалён в следующей мажорной версии.
 func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
 	return NewEventStore(serializer.JSONSerializer{}).Save(ctx, exec, event)
 }
@@ -68,7 +68,7 @@ func convertFromDBError(err error) error {
 	var msqlError *mysql.MySQLError
 	if ok := errors.As(err, &msqlError); ok {
 		switch msqlError.Number {
-		case 1062: // err duplicate rows
+		case 1062: // дублирующаяся строка
 			return ErrEventAlreadyExists
 		}
 	}

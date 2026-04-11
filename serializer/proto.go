@@ -6,8 +6,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// ProtoSerializer serializes payloads using protobuf binary encoding.
-// The payload passed to EventStore.Save must implement proto.Message.
+// ProtoSerializer сериализует полезные нагрузки в бинарный формат protobuf.
+// Полезная нагрузка, передаваемая в EventStore.Save, должна реализовывать proto.Message.
 type ProtoSerializer struct{}
 
 func (ProtoSerializer) Marshal(v interface{}) ([]byte, error) {
