@@ -24,10 +24,10 @@ func New(db *sql.DB, s serializer.Serializer) *Outbox {
 	}
 }
 
-// EventStore returns an EventStore that uses the Outbox serializer.
-// Use EventStore.Save inside application transactions to write events.
+// EventStore returns an EventStore that uses the Outbox serializer and db.
+// SaveCtx can be used to resolve the executor from context via go-transaction-manager.
 func (o *Outbox) EventStore() *EventStore {
-	return NewEventStore(o.serializer)
+	return NewEventStoreWithDB(o.db, o.serializer)
 }
 
 // Dispatcher creates and returns a new Dispatcher with the given options.

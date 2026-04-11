@@ -5,6 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	trmsql "github.com/avito-tech/go-transaction-manager/drivers/sql/v2"
+	trmcontext "github.com/avito-tech/go-transaction-manager/trm/v2/context"
+	trmmanager "github.com/avito-tech/go-transaction-manager/trm/v2/manager"
 	"github.com/go-sql-driver/mysql"
 	"github.com/overtonx/outbox/v3/serializer"
 	"github.com/stretchr/testify/assert"
@@ -192,4 +196,76 @@ func TestEventStore_Save_ContentTypeInQuery(t *testing.T) {
 	assert.Contains(t, capturedQuery, "content_type")
 	// content_type arg should be "application/json"
 	assert.Equal(t, serializer.ContentTypeJSON, capturedArgs[5])
+}
+
+func TestEventStore_SaveCtx_NoDB(t *testing.T) {
+	store := NewEventStore(serializer.JSONSerializer{})
+	event := Event{
+		EventType:     "order.created",
+		AggregateType: "order",
+		AggregateID:   "order-1",
+		Topic:         "orders",
+		Payload:       "payload",
+	}
+
+	err := store.SaveCtx(context.Background(), event)
+
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no db configured")
+}
+
+func TestEventStore_SaveCtx_FallsBackToOwnDB(t *testing.T) {
+	db, mock_, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mock_.ExpectExec("INSERT INTO outbox_events").WillReturnResult(sqlmock.NewResult(1, 1))
+
+	store := NewEventStoreWithDB(db, serializer.JSONSerializer{})
+	event := Event{
+		EventType:     "order.created",
+		AggregateType: "order",
+		AggregateID:   "order-1",
+		Topic:         "orders",
+		Payload:       "payload",
+	}
+
+	// No transaction in context — should fall back to the provided *sql.DB.
+	err = store.SaveCtx(context.Background(), event)
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock_.ExpectationsWereMet())
+}
+
+func TestEventStore_SaveCtx_UsesTxFromContext(t *testing.T) {
+	db, mock_, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	mock_.ExpectBegin()
+	mock_.ExpectExec("INSERT INTO outbox_events").WillReturnResult(sqlmock.NewResult(1, 1))
+	mock_.ExpectCommit()
+
+	getter := trmsql.NewCtxGetter(trmcontext.DefaultManager)
+	store := NewEventStoreWithDB(db, serializer.JSONSerializer{}, getter)
+
+	trManager := trmmanager.Must(
+		trmsql.NewDefaultFactory(db),
+		trmmanager.WithCtxManager(trmcontext.DefaultManager),
+	)
+
+	event := Event{
+		EventType:     "order.created",
+		AggregateType: "order",
+		AggregateID:   "order-1",
+		Topic:         "orders",
+		Payload:       "payload",
+	}
+
+	err = trManager.Do(context.Background(), func(ctx context.Context) error {
+		return store.SaveCtx(ctx, event)
+	})
+
+	assert.NoError(t, err)
+	assert.NoError(t, mock_.ExpectationsWereMet())
 }
