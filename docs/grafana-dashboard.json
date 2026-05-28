@@ -140,7 +140,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum(rate(event_processor_publish_success_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "success/s",
+          "legendFormat": "success/s / {{job}}",
           "refId": "A"
         }
       ]
@@ -207,7 +207,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum(rate(event_processor_publish_failed_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "failed/s",
+          "legendFormat": "failed/s / {{job}}",
           "refId": "A"
         }
       ]
@@ -274,7 +274,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum(rate(deadletter_moved_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "moved/s",
+          "legendFormat": "moved/s / {{job}}",
           "refId": "A"
         }
       ]
@@ -337,7 +337,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum(rate(stuck_events_recovered_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "recovered/s",
+          "legendFormat": "recovered/s / {{job}}",
           "refId": "A"
         }
       ]
@@ -404,7 +404,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum(rate(event_processor_max_attempts_exceeded_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "exceeded/s",
+          "legendFormat": "exceeded/s / {{job}}",
           "refId": "A"
         }
       ]
@@ -471,7 +471,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum(rate(event_processor_db_update_failed_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "failed/s",
+          "legendFormat": "failed/s / {{job}}",
           "refId": "A"
         }
       ]
@@ -574,7 +574,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (status) (rate(event_processor_processed_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{status}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -665,7 +665,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (event_type) (rate(event_processor_publish_success_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "{{event_type}}",
+          "legendFormat": "{{event_type}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -756,7 +756,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (event_type, reason) (rate(event_processor_publish_failed_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "{{event_type}} / {{reason}}",
+          "legendFormat": "{{event_type}} / {{reason}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -847,7 +847,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (event_type) (rate(event_processor_retry_scheduled_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "retry / {{event_type}}",
+          "legendFormat": "retry / {{event_type}} / {{job}}",
           "refId": "A"
         },
         {
@@ -856,7 +856,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (event_type) (rate(event_processor_max_attempts_exceeded_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "max_exceeded / {{event_type}}",
+          "legendFormat": "max_exceeded / {{event_type}} / {{job}}",
           "refId": "B"
         }
       ]
@@ -947,7 +947,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (operation, reason) (rate(event_processor_db_update_failed_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{operation}} / {{reason}}",
+          "legendFormat": "{{operation}} / {{reason}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -1038,7 +1038,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (status) (rate(event_processor_db_update_success_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "status={{status}}",
+          "legendFormat": "status={{status}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -1129,7 +1129,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50",
+          "legendFormat": "p50 / {{job}}",
           "refId": "A"
         },
         {
@@ -1138,7 +1138,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95",
+          "legendFormat": "p95 / {{job}}",
           "refId": "B"
         },
         {
@@ -1147,7 +1147,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.99, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99",
+          "legendFormat": "p99 / {{job}}",
           "refId": "C"
         }
       ]
@@ -1238,7 +1238,7 @@
             "uid": "${datasource}"
           },
           "expr": "event_processor_batch_size{job=~\"$job\"}",
-          "legendFormat": "total",
+          "legendFormat": "total / {{job}}",
           "refId": "A"
         }
       ]
@@ -1341,7 +1341,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (status) (rate(deadletter_moved_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{status}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -1432,7 +1432,7 @@
             "uid": "${datasource}"
           },
           "expr": "deadletter_batch_size{job=~\"$job\"}",
-          "legendFormat": "total",
+          "legendFormat": "total / {{job}}",
           "refId": "A"
         }
       ]
@@ -1523,7 +1523,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50",
+          "legendFormat": "p50 / {{job}}",
           "refId": "A"
         },
         {
@@ -1532,7 +1532,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95",
+          "legendFormat": "p95 / {{job}}",
           "refId": "B"
         },
         {
@@ -1541,7 +1541,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.99, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99",
+          "legendFormat": "p99 / {{job}}",
           "refId": "C"
         }
       ]
@@ -1644,7 +1644,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (status) (rate(stuck_events_recovered_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{status}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -1735,7 +1735,7 @@
             "uid": "${datasource}"
           },
           "expr": "stuck_events_batch_size{job=~\"$job\"}",
-          "legendFormat": "total",
+          "legendFormat": "total / {{job}}",
           "refId": "A"
         }
       ]
@@ -1826,7 +1826,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50",
+          "legendFormat": "p50 / {{job}}",
           "refId": "A"
         },
         {
@@ -1835,7 +1835,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95",
+          "legendFormat": "p95 / {{job}}",
           "refId": "B"
         },
         {
@@ -1844,7 +1844,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.99, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99",
+          "legendFormat": "p99 / {{job}}",
           "refId": "C"
         }
       ]
@@ -1947,7 +1947,7 @@
             "uid": "${datasource}"
           },
           "expr": "sum by (status) (rate(cleanup_executed_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}}",
+          "legendFormat": "{{status}} / {{job}}",
           "refId": "A"
         }
       ]
@@ -2038,7 +2038,7 @@
             "uid": "${datasource}"
           },
           "expr": "cleanup_deadletters_cleaned{job=~\"$job\"}",
-          "legendFormat": "dead letters",
+          "legendFormat": "dead letters / {{job}}",
           "refId": "A"
         },
         {
@@ -2047,7 +2047,7 @@
             "uid": "${datasource}"
           },
           "expr": "cleanup_sent_events_cleaned{job=~\"$job\"}",
-          "legendFormat": "sent events",
+          "legendFormat": "sent events / {{job}}",
           "refId": "B"
         }
       ]
@@ -2138,7 +2138,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.50, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50",
+          "legendFormat": "p50 / {{job}}",
           "refId": "A"
         },
         {
@@ -2147,7 +2147,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.95, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95",
+          "legendFormat": "p95 / {{job}}",
           "refId": "B"
         },
         {
@@ -2156,7 +2156,7 @@
             "uid": "${datasource}"
           },
           "expr": "histogram_quantile(0.99, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99",
+          "legendFormat": "p99 / {{job}}",
           "refId": "C"
         }
       ]
