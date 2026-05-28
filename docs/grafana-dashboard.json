@@ -139,8 +139,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(event_processor_publish_success_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "success/s / {{job}}",
+          "expr": "sum(rate(event_processor_publish_success_total{job=~\"$exported_job\"}[5m]))",
+          "legendFormat": "success/s / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -206,8 +206,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(event_processor_publish_failed_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "failed/s / {{job}}",
+          "expr": "sum(rate(event_processor_publish_failed_total{job=~\"$exported_job\"}[5m]))",
+          "legendFormat": "failed/s / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -273,8 +273,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(deadletter_moved_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "moved/s / {{job}}",
+          "expr": "sum(rate(deadletter_moved_total{job=~\"$exported_job\"}[5m]))",
+          "legendFormat": "moved/s / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -336,8 +336,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(stuck_events_recovered_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "recovered/s / {{job}}",
+          "expr": "sum(rate(stuck_events_recovered_total{job=~\"$exported_job\"}[5m]))",
+          "legendFormat": "recovered/s / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -403,8 +403,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(event_processor_max_attempts_exceeded_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "exceeded/s / {{job}}",
+          "expr": "sum(rate(event_processor_max_attempts_exceeded_total{job=~\"$exported_job\"}[5m]))",
+          "legendFormat": "exceeded/s / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -470,8 +470,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum(rate(event_processor_db_update_failed_total{job=~\"$job\"}[5m]))",
-          "legendFormat": "failed/s / {{job}}",
+          "expr": "sum(rate(event_processor_db_update_failed_total{job=~\"$exported_job\"}[5m]))",
+          "legendFormat": "failed/s / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -573,8 +573,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (status) (rate(event_processor_processed_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}} / {{job}}",
+          "expr": "sum by (status) (rate(event_processor_processed_total{job=~\"$exported_job\"}[$__rate_interval]))",
+          "legendFormat": "{{status}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -664,8 +664,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (event_type) (rate(event_processor_publish_success_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "{{event_type}} / {{job}}",
+          "expr": "sum by (event_type) (rate(event_processor_publish_success_total{job=~\"$exported_job\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "{{event_type}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -755,8 +755,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (event_type, reason) (rate(event_processor_publish_failed_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "{{event_type}} / {{reason}} / {{job}}",
+          "expr": "sum by (event_type, reason) (rate(event_processor_publish_failed_total{job=~\"$exported_job\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "{{event_type}} / {{reason}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -846,8 +846,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (event_type) (rate(event_processor_retry_scheduled_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "retry / {{event_type}} / {{job}}",
+          "expr": "sum by (event_type) (rate(event_processor_retry_scheduled_total{job=~\"$exported_job\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "retry / {{event_type}} / {{exported_job}}",
           "refId": "A"
         },
         {
@@ -855,8 +855,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (event_type) (rate(event_processor_max_attempts_exceeded_total{job=~\"$job\", event_type=~\"$event_type\"}[$__rate_interval]))",
-          "legendFormat": "max_exceeded / {{event_type}} / {{job}}",
+          "expr": "sum by (event_type) (rate(event_processor_max_attempts_exceeded_total{job=~\"$exported_job\", event_type=~\"$event_type\"}[$__rate_interval]))",
+          "legendFormat": "max_exceeded / {{event_type}} / {{exported_job}}",
           "refId": "B"
         }
       ]
@@ -946,8 +946,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (operation, reason) (rate(event_processor_db_update_failed_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{operation}} / {{reason}} / {{job}}",
+          "expr": "sum by (operation, reason) (rate(event_processor_db_update_failed_total{job=~\"$exported_job\"}[$__rate_interval]))",
+          "legendFormat": "{{operation}} / {{reason}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1037,8 +1037,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (status) (rate(event_processor_db_update_success_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "status={{status}} / {{job}}",
+          "expr": "sum by (status) (rate(event_processor_db_update_success_total{job=~\"$exported_job\"}[$__rate_interval]))",
+          "legendFormat": "status={{status}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1128,8 +1128,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50 / {{job}}",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p50 / {{exported_job}}",
           "refId": "A"
         },
         {
@@ -1137,8 +1137,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95 / {{job}}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p95 / {{exported_job}}",
           "refId": "B"
         },
         {
@@ -1146,8 +1146,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99 / {{job}}",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(event_processor_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p99 / {{exported_job}}",
           "refId": "C"
         }
       ]
@@ -1237,8 +1237,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "event_processor_batch_size{job=~\"$job\"}",
-          "legendFormat": "total / {{job}}",
+          "expr": "event_processor_batch_size{job=~\"$exported_job\"}",
+          "legendFormat": "total / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1340,8 +1340,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (status) (rate(deadletter_moved_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}} / {{job}}",
+          "expr": "sum by (status) (rate(deadletter_moved_total{job=~\"$exported_job\"}[$__rate_interval]))",
+          "legendFormat": "{{status}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1431,8 +1431,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "deadletter_batch_size{job=~\"$job\"}",
-          "legendFormat": "total / {{job}}",
+          "expr": "deadletter_batch_size{job=~\"$exported_job\"}",
+          "legendFormat": "total / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1522,8 +1522,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50 / {{job}}",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p50 / {{exported_job}}",
           "refId": "A"
         },
         {
@@ -1531,8 +1531,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95 / {{job}}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p95 / {{exported_job}}",
           "refId": "B"
         },
         {
@@ -1540,8 +1540,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99 / {{job}}",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(deadletter_move_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p99 / {{exported_job}}",
           "refId": "C"
         }
       ]
@@ -1643,8 +1643,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (status) (rate(stuck_events_recovered_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}} / {{job}}",
+          "expr": "sum by (status) (rate(stuck_events_recovered_total{job=~\"$exported_job\"}[$__rate_interval]))",
+          "legendFormat": "{{status}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1734,8 +1734,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "stuck_events_batch_size{job=~\"$job\"}",
-          "legendFormat": "total / {{job}}",
+          "expr": "stuck_events_batch_size{job=~\"$exported_job\"}",
+          "legendFormat": "total / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -1825,8 +1825,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50 / {{job}}",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p50 / {{exported_job}}",
           "refId": "A"
         },
         {
@@ -1834,8 +1834,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95 / {{job}}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p95 / {{exported_job}}",
           "refId": "B"
         },
         {
@@ -1843,8 +1843,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99 / {{job}}",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(stuck_events_recovery_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p99 / {{exported_job}}",
           "refId": "C"
         }
       ]
@@ -1946,8 +1946,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "sum by (status) (rate(cleanup_executed_total{job=~\"$job\"}[$__rate_interval]))",
-          "legendFormat": "{{status}} / {{job}}",
+          "expr": "sum by (status) (rate(cleanup_executed_total{job=~\"$exported_job\"}[$__rate_interval]))",
+          "legendFormat": "{{status}} / {{exported_job}}",
           "refId": "A"
         }
       ]
@@ -2037,8 +2037,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cleanup_deadletters_cleaned{job=~\"$job\"}",
-          "legendFormat": "dead letters / {{job}}",
+          "expr": "cleanup_deadletters_cleaned{job=~\"$exported_job\"}",
+          "legendFormat": "dead letters / {{exported_job}}",
           "refId": "A"
         },
         {
@@ -2046,8 +2046,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "cleanup_sent_events_cleaned{job=~\"$job\"}",
-          "legendFormat": "sent events / {{job}}",
+          "expr": "cleanup_sent_events_cleaned{job=~\"$exported_job\"}",
+          "legendFormat": "sent events / {{exported_job}}",
           "refId": "B"
         }
       ]
@@ -2137,8 +2137,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p50 / {{job}}",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p50 / {{exported_job}}",
           "refId": "A"
         },
         {
@@ -2146,8 +2146,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p95 / {{job}}",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p95 / {{exported_job}}",
           "refId": "B"
         },
         {
@@ -2155,8 +2155,8 @@
             "type": "prometheus",
             "uid": "${datasource}"
           },
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$job\"}[$__rate_interval])))",
-          "legendFormat": "p99 / {{job}}",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(cleanup_duration_seconds_bucket{job=~\"$exported_job\"}[$__rate_interval])))",
+          "legendFormat": "p99 / {{exported_job}}",
           "refId": "C"
         }
       ]
@@ -2189,22 +2189,22 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(event_processor_processed_total, job)",
+        "definition": "label_values(event_processor_processed_total, exported_job)",
         "hide": 0,
         "includeAll": true,
         "allValue": ".*",
         "multi": true,
-        "name": "job",
+        "name": "exported_job",
         "options": [],
         "query": {
-          "query": "label_values(event_processor_processed_total, job)",
+          "query": "label_values(event_processor_processed_total, exported_job)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
         "regex": "",
         "sort": 1,
         "type": "query",
-        "label": "Job"
+        "label": "Exported Job"
       },
       {
         "current": {},
@@ -2212,7 +2212,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(event_processor_publish_success_total{job=~\"$job\"}, event_type)",
+        "definition": "label_values(event_processor_publish_success_total{job=~\"$exported_job\"}, event_type)",
         "hide": 0,
         "includeAll": true,
         "allValue": ".*",
@@ -2220,7 +2220,7 @@
         "name": "event_type",
         "options": [],
         "query": {
-          "query": "label_values(event_processor_publish_success_total{job=~\"$job\"}, event_type)",
+          "query": "label_values(event_processor_publish_success_total{job=~\"$exported_job\"}, event_type)",
           "refId": "StandardVariableQuery"
         },
         "refresh": 2,
