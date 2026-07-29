@@ -7,24 +7,43 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	defaultBatchSize              = 100
+	defaultPollInterval           = 2 * time.Second
+	defaultMaxAttempts            = 3
+	defaultProcessingLeaseTimeout = 60 * time.Second
+	defaultBaseDelay              = 1 * time.Minute
+	defaultMaxDelay               = 30 * time.Minute
+)
+
 type DispatcherOption func(*dispatcherOptions) error
 
 type dispatcherOptions struct {
-	batchSize               int
-	pollInterval            time.Duration
-	maxAttempts             int
-	deadLetterInterval      time.Duration
-	stuckEventTimeout       time.Duration
-	stuckEventCheckInterval time.Duration
-	deadLetterRetention     time.Duration
-	sentEventsRetention     time.Duration
-	cleanupInterval         time.Duration
-	backoffStrategy         BackoffStrategy
-	publisher               Publisher
-	metrics                 MetricsCollector
-	logger                  *zap.Logger
+	batchSize              int
+	pollInterval           time.Duration
+	maxAttempts            int
+	processingLeaseTimeout time.Duration
+	lockName               string
+	backoffStrategy        BackoffStrategy
+	publisher              Publisher
+	metrics                MetricsCollector
+	logger                 *zap.Logger
 }
 
+func defaultDispatcherOptions() *dispatcherOptions {
+	return &dispatcherOptions{
+		batchSize:              defaultBatchSize,
+		pollInterval:           defaultPollInterval,
+		maxAttempts:            defaultMaxAttempts,
+		processingLeaseTimeout: defaultProcessingLeaseTimeout,
+		backoffStrategy:        DefaultBackoffStrategy(),
+		metrics:                NewOTelMetrics(),
+		logger:                 zap.NewNop(),
+	}
+}
+
+// WithBatchSize задаёт максимальное число событий, забираемых из БД за один
+// reconcile-тик.
 func WithBatchSize(size int) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		if size <= 0 {
@@ -38,6 +57,8 @@ func WithBatchSize(size int) DispatcherOption {
 	}
 }
 
+// WithPollInterval задаёт интервал между reconcile-тиками лидера, а также
+// интервал, с которым standby-инстансы пытаются переизбраться в лидеры.
 func WithPollInterval(interval time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		if interval <= 0 {
@@ -48,6 +69,8 @@ func WithPollInterval(interval time.Duration) DispatcherOption {
 	}
 }
 
+// WithMaxAttempts задаёт число попыток публикации перед переносом события в
+// outbox_deadletters.
 func WithMaxAttempts(attempts int) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		if attempts <= 0 {
@@ -58,53 +81,30 @@ func WithMaxAttempts(attempts int) DispatcherOption {
 	}
 }
 
-func WithDeadLetterInterval(interval time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		if interval <= 0 {
-			return fmt.Errorf("dead letter interval must be positive, got %s", interval)
-		}
-		opts.deadLetterInterval = interval
-		return nil
-	}
-}
-
-func WithStuckEventTimeout(timeout time.Duration) DispatcherOption {
+// WithProcessingLeaseTimeout задаёт время, после которого событие, зависшее
+// в статусе processing (например, из-за падения инстанса-лидера между
+// клеймингом и обновлением финального статуса), считается протухшим и
+// переклеймливается в том же reconcile-запросе, что и новые/retry события.
+func WithProcessingLeaseTimeout(timeout time.Duration) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
 		if timeout <= 0 {
-			return fmt.Errorf("stuck event timeout must be positive, got %s", timeout)
+			return fmt.Errorf("processing lease timeout must be positive, got %s", timeout)
 		}
-		opts.stuckEventTimeout = timeout
+		opts.processingLeaseTimeout = timeout
 		return nil
 	}
 }
 
-func WithStuckEventCheckInterval(interval time.Duration) DispatcherOption {
+// WithLockName задаёт имя MySQL advisory-лока (GET_LOCK), используемого для
+// выбора единственного активного лидера среди нескольких инстансов
+// Dispatcher. По умолчанию выводится из имени текущей схемы БД — задавайте
+// явно, если в одной схеме работает несколько независимых outbox-каналов.
+func WithLockName(name string) DispatcherOption {
 	return func(opts *dispatcherOptions) error {
-		if interval <= 0 {
-			return fmt.Errorf("stuck event check interval must be positive, got %s", interval)
+		if name == "" {
+			return fmt.Errorf("lock name must not be empty")
 		}
-		opts.stuckEventCheckInterval = interval
-		return nil
-	}
-}
-
-func WithDeadLetterRetention(retention time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.deadLetterRetention = retention
-		return nil
-	}
-}
-
-func WithSentEventsRetention(retention time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.sentEventsRetention = retention
-		return nil
-	}
-}
-
-func WithCleanupInterval(interval time.Duration) DispatcherOption {
-	return func(opts *dispatcherOptions) error {
-		opts.cleanupInterval = interval
+		opts.lockName = name
 		return nil
 	}
 }

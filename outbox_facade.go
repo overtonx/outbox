@@ -3,7 +3,7 @@ package outbox
 import (
 	"database/sql"
 
-	"github.com/overtonx/outbox/v3/serializer"
+	"github.com/overtonx/outbox/v4/serializer"
 )
 
 // Outbox — центральная точка входа для паттерна outbox.

@@ -8,7 +8,7 @@ import (
 
 	trmsql "github.com/avito-tech/go-transaction-manager/drivers/sql/v2"
 	"github.com/google/uuid"
-	"github.com/overtonx/outbox/v3/serializer"
+	"github.com/overtonx/outbox/v4/serializer"
 )
 
 // EventMapper преобразует Event перед сохранением в outbox.

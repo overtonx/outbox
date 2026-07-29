@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/overtonx/outbox/v3/serializer"
+	"github.com/overtonx/outbox/v4/serializer"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 )
@@ -36,6 +36,20 @@ func TestDefaultKafkaConfig(t *testing.T) {
 	assert.Equal(t, "outbox-events", config.Topic, "Expected topic 'outbox-events'")
 	assert.Equal(t, "localhost:9092", config.ProducerProps["bootstrap.servers"], "Expected brokers 'localhost:9092'")
 	assert.Equal(t, "all", config.ProducerProps["acks"], "Expected acks 'all'")
+
+	// Требования пользователя: idempotence=true, max.in.flight=5 — что при
+	// enable.idempotence=true является не рекомендацией, а обязательным
+	// значением (librdkafka откажется создать продюсер при большем).
+	assert.Equal(t, true, config.ProducerProps["enable.idempotence"])
+	assert.Equal(t, 5, config.ProducerProps["max.in.flight.requests.per.connection"])
+
+	// retries не должны быть маленьким числом при enable.idempotence=true:
+	// иначе продюсер может исчерпать попытки раньше гарантированной
+	// доставки. Общее время ограничивается delivery.timeout.ms.
+	retries, ok := config.ProducerProps["retries"].(int)
+	assert.True(t, ok)
+	assert.Greater(t, retries, 1000)
+	assert.NotZero(t, config.ProducerProps["delivery.timeout.ms"])
 }
 
 func TestNewKafkaPublisher(t *testing.T) {

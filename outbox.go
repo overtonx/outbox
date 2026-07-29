@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/go-sql-driver/mysql"
-	"github.com/overtonx/outbox/v3/serializer"
 	"go.opentelemetry.io/otel"
 )
 
@@ -56,14 +55,6 @@ func injectTraceContext(ctx context.Context, event *Event) {
 	otel.GetTextMapPropagator().Inject(ctx, carrier)
 }
 
-// SaveEvent сохраняет событие в таблицу outbox с JSON-сериализацией.
-//
-// Устарело: используйте EventStore.Save с явным Serializer.
-// SaveEvent будет удалён в следующей мажорной версии.
-func SaveEvent(ctx context.Context, exec DBExecutor, event Event) error {
-	return NewEventStore(serializer.JSONSerializer{}).SaveWithDB(ctx, exec, event)
-}
-
 func convertFromDBError(err error) error {
 	var msqlError *mysql.MySQLError
 	if ok := errors.As(err, &msqlError); ok {
@@ -74,79 +65,6 @@ func convertFromDBError(err error) error {
 	}
 
 	return err
-}
-
-func ensureOutboxTable(ctx context.Context, db *sql.DB) error {
-	err := createOutboxEventsTable(ctx, db)
-	if err != nil {
-		return err
-	}
-
-	err = createOutboxDeadlettersTable(ctx, db)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func createOutboxEventsTable(ctx context.Context, db *sql.DB) error {
-	query := `
-		CREATE TABLE IF NOT EXISTS outbox_events (
-			id              BIGINT AUTO_INCREMENT PRIMARY KEY,
-			event_id        CHAR(36)     NOT NULL UNIQUE,
-			event_type      VARCHAR(255) NOT NULL,
-			aggregate_type  VARCHAR(255) NOT NULL,
-			aggregate_id    VARCHAR(255) NOT NULL,
-			status          INT          NOT NULL DEFAULT 0 COMMENT '0 - new, 1 - success, 2 - retry, 3 - error, 4 - processing',
-			topic           VARCHAR(255) NOT NULL,
-			content_type    VARCHAR(100) NOT NULL DEFAULT 'application/json',
-			payload         LONGBLOB     NOT NULL,
-			headers         JSON         NULL,
-			attempt_count   INT          NOT NULL DEFAULT 0,
-			next_attempt_at TIMESTAMP    NULL,
-			last_error      TEXT         NULL,
-			created_at      TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-			updated_at      TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
-			INDEX idx_status_next_attempt (status, next_attempt_at),
-			INDEX idx_aggregate (aggregate_type, aggregate_id),
-			INDEX idx_created_at (created_at)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-	`
-
-	_, err := db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to create outbox_events table: %w", err)
-	}
-
-	return nil
-}
-
-func createOutboxDeadlettersTable(ctx context.Context, db *sql.DB) error {
-	query := `
-		CREATE TABLE IF NOT EXISTS outbox_deadletters
-		(
-		    id              BIGINT PRIMARY KEY,
-		    event_id        CHAR(36)      NOT NULL UNIQUE,
-		    event_type      VARCHAR(255)  NOT NULL,
-		    aggregate_type  VARCHAR(255)  NOT NULL,
-		    aggregate_id    VARCHAR(255)  NOT NULL,
-		    topic           VARCHAR(255)  NOT NULL,
-		    content_type    VARCHAR(100)  NOT NULL DEFAULT 'application/json',
-		    payload         LONGBLOB      NOT NULL,
-		    headers         JSON          NULL,
-		    attempt_count   INT           NOT NULL,
-		    last_error      VARCHAR(2000) NULL,
-		    created_at      TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-	`
-
-	_, err := db.ExecContext(ctx, query)
-	if err != nil {
-		return fmt.Errorf("failed to create outbox_deadletters table: %w", err)
-	}
-
-	return nil
 }
 
 func validateOutboxEvent(event Event) error {

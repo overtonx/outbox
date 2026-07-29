@@ -7,9 +7,17 @@ import (
 	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
-	"github.com/overtonx/outbox/v3/serializer"
+	"github.com/overtonx/outbox/v4/serializer"
 	"go.uber.org/zap"
 )
+
+// Publisher публикует заклеймленное событие во внешнюю систему обмена
+// сообщениями. Единственная реализация в проде — KafkaPublisher;
+// NopPublisher существует для тестов.
+type Publisher interface {
+	Publish(ctx context.Context, event EventRecord) error
+	Close() error
+}
 
 type NopPublisher struct {
 	logger *zap.Logger
@@ -48,12 +56,22 @@ func DefaultKafkaConfig() KafkaConfig {
 	return KafkaConfig{
 		Topic: "outbox-events",
 		ProducerProps: kafka.ConfigMap{
-			"bootstrap.servers":  "localhost:9092",
-			"acks":               "all",
-			"retries":            3,
-			"linger.ms":          10,
-			"enable.idempotence": true,
-			"compression.type":   "snappy",
+			"bootstrap.servers": "localhost:9092",
+			// enable.idempotence требует acks=all и ограничивает
+			// max.in.flight.requests.per.connection значением <= 5 —
+			// librdkafka откажется создавать продюсер при большем значении.
+			"enable.idempotence":                    true,
+			"acks":                                  "all",
+			"max.in.flight.requests.per.connection": 5,
+			// При enable.idempotence=true ограничивать retries нельзя:
+			// исчерпание ретраев раньше успешной доставки — фатальная
+			// ошибка продюсера. Общее время ограничивается через
+			// delivery.timeout.ms, а не через число попыток.
+			"retries":             2147483647,
+			"retry.backoff.ms":    100,
+			"delivery.timeout.ms": 120000,
+			"linger.ms":           10,
+			"compression.type":    "snappy",
 		},
 		HeaderBuilder: buildKafkaHeaders,
 	}
@@ -84,7 +102,12 @@ func NewKafkaPublisherFromProducer(logger *zap.Logger, producer *kafka.Producer,
 		config:   config,
 	}
 
-	go p.handleDeliveryReports()
+	// Publish всегда передаёт Produce() явный per-call deliveryChan, поэтому
+	// отчёты о доставке конкретных сообщений сюда не попадают. Но клиентские
+	// события уровня продюсера (например, потеря соединения с брокером)
+	// всё равно идут в общий Events() — если их не вычитывать, канал может
+	// заполниться и застопорить внутреннюю обработку событий продюсера.
+	go p.logClientErrors()
 
 	return p
 }
@@ -158,26 +181,10 @@ func (p *KafkaPublisher) Close() error {
 	return flushErr
 }
 
-func (p *KafkaPublisher) handleDeliveryReports() {
+func (p *KafkaPublisher) logClientErrors() {
 	for e := range p.producer.Events() {
-		switch ev := e.(type) {
-		case *kafka.Message:
-			if ev.TopicPartition.Error != nil {
-				p.logger.Error("Delivery failed",
-					zap.String("topic", *ev.TopicPartition.Topic),
-					zap.Error(ev.TopicPartition.Error),
-				)
-			} else {
-				p.logger.Debug("Successfully delivered message",
-					zap.String("topic", *ev.TopicPartition.Topic),
-					zap.Int32("partition", ev.TopicPartition.Partition),
-					zap.Any("offset", ev.TopicPartition.Offset),
-				)
-			}
-		case kafka.Error:
-			p.logger.Error("Kafka error", zap.Error(ev))
-		default:
-			p.logger.Debug("Ignored kafka event", zap.Any("event", ev))
+		if kafkaErr, ok := e.(kafka.Error); ok {
+			p.logger.Error("outbox: kafka client error", zap.Error(kafkaErr))
 		}
 	}
 }

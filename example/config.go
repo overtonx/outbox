@@ -29,15 +29,10 @@ type KafkaConfig struct {
 
 // OutboxConfig содержит настройки outbox dispatcher
 type OutboxConfig struct {
-	BatchSize               int
-	PollInterval            time.Duration
-	MaxAttempts             int
-	DeadLetterInterval      time.Duration
-	StuckEventTimeout       time.Duration
-	StuckEventCheckInterval time.Duration
-	DeadLetterRetention     time.Duration
-	SentEventsRetention     time.Duration
-	CleanupInterval         time.Duration
+	BatchSize              int
+	PollInterval           time.Duration
+	MaxAttempts            int
+	ProcessingLeaseTimeout time.Duration
 }
 
 // DefaultConfig возвращает конфигурацию по умолчанию
@@ -55,15 +50,10 @@ func DefaultConfig() Config {
 			Topic:   "outbox-events",
 		},
 		Outbox: OutboxConfig{
-			BatchSize:               10,
-			PollInterval:            2 * time.Second,
-			MaxAttempts:             3,
-			DeadLetterInterval:      5 * time.Minute,
-			StuckEventTimeout:       10 * time.Minute,
-			StuckEventCheckInterval: 2 * time.Minute,
-			DeadLetterRetention:     7 * 24 * time.Hour,
-			SentEventsRetention:     24 * time.Hour,
-			CleanupInterval:         1 * time.Hour,
+			BatchSize:              10,
+			PollInterval:           2 * time.Second,
+			MaxAttempts:            3,
+			ProcessingLeaseTimeout: 60 * time.Second,
 		},
 	}
 }

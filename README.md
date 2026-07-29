@@ -1,40 +1,66 @@
 # Реализация паттерна Outbox
 
-Этот проект представляет собой реализацию паттерна "Transactional Outbox" на Go. Он обеспечивает надежную асинхронную доставку сообщений из микросервисов в брокер сообщений (по умолчанию Kafka), даже в случае сбоев.
+Этот проект — реализация паттерна "Transactional Outbox" на Go для MySQL и Kafka.
+Он обеспечивает надёжную асинхронную доставку сообщений из микросервисов в Kafka,
+даже в случае сбоев, **сохраняя порядок публикации в пределах одного aggregate_id**
+и оставаясь безопасным при запуске нескольких инстансов одного сервиса.
 
 ## Установка
 
 ```bash
-go get github.com/overtonx/outbox/v3
+go get github.com/overtonx/outbox/v4
 ```
 
 ## Основной флоу
 
-1.  **Сохранение события**: Вместо прямой отправки сообщения в брокер, сервис сохраняет его как событие (`Event`) в специальную таблицу `outbox_events` в своей базе данных. Это происходит в рамках той же транзакции, что и основная бизнес-логика. Это гарантирует, что событие будет сохранено только в том случае, если бизнес-транзакция успешно завершена.
-2.  **Фоновая обработка**: Отдельный процесс, **Диспетчер (`Dispatcher`)**, периодически опрашивает таблицу `outbox_events` на наличие новых, необработанных событий.
-3.  **Публикация**: Обнаружив новые события, `Dispatcher` с помощью **Публикатора (`Publisher`)** отправляет их в брокер сообщений.
-4.  **Обновление статуса**: После успешной отправки `Dispatcher` помечает событие в таблице как обработанное. В случае сбоя отправки, он увеличивает счетчик попыток и планирует повторную отправку с использованием настраиваемой стратегии отсрочки (backoff).
-5.  **Dead-Letter Queue**: Если событие не удается доставить после максимального количества попыток, оно перемещается в таблицу "мертвых писем" (`outbox_deadletters`) для последующего анализа.
+1.  **Сохранение события**: вместо прямой отправки сообщения в Kafka сервис
+    сохраняет его как событие (`Event`) в таблицу `outbox_events` — в рамках той
+    же транзакции, что и основная бизнес-логика. Событие сохранится, только если
+    бизнес-транзакция успешно закоммитится.
+2.  **Единственный активный лидер**: `Dispatcher` можно поднимать в нескольких
+    инстансах (несколько подов одного сервиса) — активно вычитывает и публикует
+    события ровно один из них (лидер), выбранный через именованный advisory-лок
+    MySQL (`GET_LOCK`). Остальные простаивают как hot standby и подхватывают
+    публикацию, если лидер падает — обычно в течение одного `PollInterval`.
+3.  **Клейминг и публикация в порядке вставки**: лидер выбирает события из БД,
+    отсортированные по `created_at, id`, клеймит их (`SELECT ... FOR UPDATE SKIP
+    LOCKED`) и публикует в Kafka строго в этом порядке. Тот же запрос
+    восстанавливает события, зависшие в статусе "в обработке" после падения
+    процесса — отдельного воркера восстановления не требуется.
+4.  **Ретраи**: при ошибке публикации событие переходит в статус `retry` со
+    временем следующей попытки по настраиваемой стратегии backoff, либо в
+    `error`, если попытки исчерпаны.
+5.  **Dead-Letter**: события, исчерпавшие попытки, переносятся в
+    `outbox_deadletters` в рамках того же цикла лидера.
 
 ## Компоненты
 
--   **`Outbox`**: Центральная точка входа. Создаётся через `New(db, serializer)` и предоставляет фабричные методы для `EventStore` и `Dispatcher`.
--   **`EventStore`**: Сохраняет события в таблицу `outbox_events`, сериализуя payload с помощью настроенного `Serializer`. Поддерживает опциональный `EventMapper` для преобразования события перед сохранением (`WithMapper`).
--   **`Serializer`** (`github.com/overtonx/outbox/v3/serializer`): Интерфейс для сериализации payload. Встроены `JSONSerializer` и `ProtoSerializer`. Можно реализовать свой для Avro, MessagePack и других форматов.
--   **`Dispatcher`**: Ядро системы. Управляет воркерами, которые опрашивают базу данных, обрабатывают и публикуют события, а также выполняют очистку.
--   **`Publisher`**: Интерфейс для отправки сообщений. По умолчанию предоставляется `KafkaPublisher`. Вы можете реализовать свой собственный `Publisher` для интеграции с другими брокерами (например, RabbitMQ).
--   **Воркеры (`Worker`)**: Фоновые процессы, управляемые `Dispatcher`:
-    -   `EventProcessor`: Обрабатывает и публикует новые события.
-    -   `DeadLetterService`: Перемещает неисправимые события в DLQ.
-    -   `StuckEventService`: Восстанавливает "зависшие" события.
-    -   `CleanupService`: Удаляет старые обработанные события и записи из DLQ.
+-   **`Outbox`**: точка входа. Создаётся через `New(db, serializer)`, даёт
+    фабричные методы для `EventStore` и `Dispatcher`.
+-   **`EventStore`**: сохраняет события в `outbox_events`, сериализуя payload
+    настроенным `Serializer`. `Save(ctx, event)` берёт исполнителя (`*sql.Tx`
+    или `*sql.DB`) из контекста через `avito-tech/go-transaction-manager`;
+    `SaveWithDB(ctx, exec, event)` принимает исполнителя явно. Поддерживает
+    `EventMapper` (`WithMapper`) для преобразования события перед сохранением.
+-   **`Serializer`** (`github.com/overtonx/outbox/v4/serializer`): `JSONSerializer`
+    и `ProtoSerializer` из коробки, либо реализуйте свой.
+-   **`Dispatcher`**: единственный компонент, отвечающий за выбор лидера
+    (`GET_LOCK`) и за reconcile-цикл (claim → publish → dead-letter) на каждом
+    `PollInterval`, пока процесс лидер.
+-   **`Publisher`**: интерфейс отправки сообщений. По умолчанию —
+    `KafkaPublisher` с `enable.idempotence=true` и
+    `max.in.flight.requests.per.connection=5`.
+-   **`migrations`** (`github.com/overtonx/outbox/v4/migrations`): версионированная
+    SQL-схема, встроенная через `go:embed`. Применяется автоматически при
+    создании `Dispatcher`, либо используйте `FS()` со своим инструментом
+    миграций (golang-migrate, goose и т.п.).
 
 ## Быстрый старт
 
 ```go
 import (
-    "github.com/overtonx/outbox/v3"
-    "github.com/overtonx/outbox/v3/serializer"
+    "github.com/overtonx/outbox/v4"
+    "github.com/overtonx/outbox/v4/serializer"
 )
 
 // 1. Создание фасада с выбором сериализатора
@@ -57,7 +83,9 @@ if err != nil {
 }
 tx.Commit()
 
-// 3. Запуск диспетчера в фоне
+// 3. Запуск диспетчера в фоне. Dispatcher.Start применяет миграции схемы
+// при создании и блокируется до отмены ctx или Stop() — можно безопасно
+// поднимать несколько инстансов против одной БД, лидер выберется сам.
 dispatcher, err := ob.Dispatcher(
     outbox.WithPublisher(kafkaPublisher),
     outbox.WithPollInterval(5 * time.Second),
@@ -68,52 +96,105 @@ if err != nil {
 go dispatcher.Start(context.Background())
 ```
 
+## Гарантия порядка при нескольких инстансах
+
+`Dispatcher` безопасно запускать в нескольких копиях одного сервиса против
+одной БД — например, несколько подов Kubernetes. Активно клеймит и публикует
+события **ровно один** инстанс (лидер): он получает именованный advisory-лок
+MySQL (`SELECT GET_LOCK(name, 0)`), опрашиваемый каждым инстансом раз в
+`PollInterval`. Имя лока по умолчанию выводится из имени текущей схемы БД
+(`outbox:leader:<schema>`) — задайте его явно через `WithLockName`, если в
+одной схеме работает несколько независимых outbox-каналов.
+
+Пока инстанс держит лок, он выполняет reconcile-цикл (claim → publish →
+dead-letter) каждый `PollInterval`. Если процесс-лидер падает или теряет
+соединение с БД, лок освобождается автоматически (сессионный), и любой
+простаивающий инстанс подхватывает лидерство на следующем цикле опроса —
+обычно в пределах одного `PollInterval`.
+
+Важно понимать границы гарантии:
+
+-   Kafka сама не гарантирует порядок между партициями. Сообщения ключуются
+    `AggregateID`, поэтому единственная гарантия, наблюдаемая потребителем —
+    **порядок в пределах одного `aggregate_id`**. Единственный активный лидер
+    даёт более сильную гарантию (полный порядок публикации внутри
+    `Dispatcher`), чем шардинг по `aggregate_id` между инстансами.
+-   Если процесс падает **после** успешной доставки в Kafka, но **до** записи
+    статуса `sent`, событие будет переклеймлено и опубликовано повторно при
+    восстановлении. Это стандартная at-least-once семантика outbox —
+    потребители обязаны дедуплицировать по заголовку Kafka `event_id`.
+
 ## Схема базы данных
 
-Таблицы создаются автоматически при инициализации `Dispatcher`. Актуальная схема:
+Схема — версионированные SQL-миграции в `github.com/overtonx/outbox/v4/migrations`,
+применяются автоматически при создании `Dispatcher` (идемпотентно, отслеживаются
+в таблице `outbox_schema_migrations`). Текущая схема (`migrations/0001_init.sql`):
 
 ```sql
 CREATE TABLE IF NOT EXISTS outbox_events (
-    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
-    event_id        CHAR(36)     NOT NULL UNIQUE,
-    event_type      VARCHAR(255) NOT NULL,
-    aggregate_type  VARCHAR(255) NOT NULL,
-    aggregate_id    VARCHAR(255) NOT NULL,
-    status          INT          NOT NULL DEFAULT 0, -- 0=new, 1=sent, 2=retry, 3=error, 4=processing
-    topic           VARCHAR(255) NOT NULL,
-    content_type    VARCHAR(100) NOT NULL DEFAULT 'application/json',
-    payload         LONGBLOB     NOT NULL,
-    headers         JSON         NULL,
-    attempt_count   INT          NOT NULL DEFAULT 0,
-    next_attempt_at TIMESTAMP    NULL,
-    last_error      TEXT         NULL,
-    created_at      TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    updated_at      TIMESTAMP(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    id              BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    event_id        CHAR(36)      NOT NULL,
+    event_type      VARCHAR(255)  NOT NULL,
+    aggregate_type  VARCHAR(255)  NOT NULL,
+    aggregate_id    VARCHAR(255)  NOT NULL,
+    topic           VARCHAR(255)  NOT NULL,
+    content_type    VARCHAR(100)  NOT NULL DEFAULT 'application/json',
+    payload         LONGBLOB      NOT NULL,
+    headers         JSON          NULL,
+    status          TINYINT UNSIGNED NOT NULL DEFAULT 0, -- 0=new,1=sent,2=retry,3=error,4=processing
+    attempt_count   INT UNSIGNED  NOT NULL DEFAULT 0,
+    next_attempt_at TIMESTAMP(6)  NULL,
+    last_error      TEXT          NULL,
+    created_at      TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    updated_at      TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6) ON UPDATE CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uq_outbox_events_event_id (event_id),
+    KEY idx_outbox_events_claim (status, created_at, id),
+    KEY idx_outbox_events_aggregate (aggregate_type, aggregate_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS outbox_deadletters (
-    id             BIGINT PRIMARY KEY,
-    event_id       CHAR(36)      NOT NULL UNIQUE,
-    event_type     VARCHAR(255)  NOT NULL,
-    aggregate_type VARCHAR(255)  NOT NULL,
-    aggregate_id   VARCHAR(255)  NOT NULL,
-    topic          VARCHAR(255)  NOT NULL,
-    content_type   VARCHAR(100)  NOT NULL DEFAULT 'application/json',
-    payload        LONGBLOB      NOT NULL,
-    headers        JSON          NULL,
-    attempt_count  INT           NOT NULL,
-    last_error     VARCHAR(2000) NULL,
-    created_at     TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    id              BIGINT UNSIGNED PRIMARY KEY,
+    event_id        CHAR(36)      NOT NULL,
+    event_type      VARCHAR(255)  NOT NULL,
+    aggregate_type  VARCHAR(255)  NOT NULL,
+    aggregate_id    VARCHAR(255)  NOT NULL,
+    topic           VARCHAR(255)  NOT NULL,
+    content_type    VARCHAR(100)  NOT NULL DEFAULT 'application/json',
+    payload         LONGBLOB      NOT NULL,
+    headers         JSON          NULL,
+    attempt_count   INT UNSIGNED  NOT NULL,
+    last_error      TEXT          NULL,
+    created_at      TIMESTAMP(6)  NOT NULL,
+    moved_at        TIMESTAMP(6)  NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
+    UNIQUE KEY uq_outbox_deadletters_event_id (event_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+### Очистка старых событий
+
+В отличие от v3, `Dispatcher` **не удаляет** старые `sent`-события или записи
+`outbox_deadletters` — это вынесено за пределы библиотеки. Настройте
+периодическую очистку самостоятельно (cron, systemd timer, k8s CronJob):
+
+```sql
+DELETE FROM outbox_events
+WHERE status = 1 AND created_at < NOW() - INTERVAL 1 DAY
+LIMIT 1000;
+
+DELETE FROM outbox_deadletters
+WHERE moved_at < NOW() - INTERVAL 7 DAY
+LIMIT 1000;
 ```
 
 ## Сериализация
 
-`Outbox` использует интерфейс `serializer.Serializer` для преобразования payload перед записью в БД. Тип сериализации сохраняется в колонке `content_type` и передаётся потребителям Kafka через заголовок `content-type`.
+`Outbox` использует интерфейс `serializer.Serializer` для преобразования payload
+перед записью в БД. Тип сериализации сохраняется в колонке `content_type` и
+передаётся потребителям Kafka через заголовок `content-type`.
 
 ### Доступные сериализаторы
 
-Пакет: `github.com/overtonx/outbox/v3/serializer`
+Пакет: `github.com/overtonx/outbox/v4/serializer`
 
 | Тип                | `content_type`         | Описание                        |
 |--------------------|------------------------|---------------------------------|
@@ -123,7 +204,7 @@ CREATE TABLE IF NOT EXISTS outbox_deadletters (
 ### JSONSerializer
 
 ```go
-import "github.com/overtonx/outbox/v3/serializer"
+import "github.com/overtonx/outbox/v4/serializer"
 
 ob := outbox.New(db, serializer.JSONSerializer{})
 ```
@@ -133,11 +214,11 @@ ob := outbox.New(db, serializer.JSONSerializer{})
 Payload должен реализовывать `proto.Message`.
 
 ```go
-import "github.com/overtonx/outbox/v3/serializer"
+import "github.com/overtonx/outbox/v4/serializer"
 
 ob := outbox.New(db, serializer.ProtoSerializer{})
 store := ob.EventStore()
-err := store.Save(ctx, tx, outbox.Event{
+err := store.SaveWithDB(ctx, tx, outbox.Event{
     EventType:     "order.created",
     AggregateType: "order",
     AggregateID:   "order-1",
@@ -146,14 +227,10 @@ err := store.Save(ctx, tx, outbox.Event{
 })
 ```
 
-Потребители Kafka получат заголовок `content-type: application/protobuf` и смогут выбрать нужный десериализатор.
-
 ### Свой сериализатор
 
-Реализуйте интерфейс `serializer.Serializer` для любого другого формата:
-
 ```go
-import "github.com/overtonx/outbox/v3/serializer"
+import "github.com/overtonx/outbox/v4/serializer"
 
 type AvroSerializer struct{ schema string }
 
@@ -163,18 +240,16 @@ func (s AvroSerializer) Marshal(v interface{}) ([]byte, error) {
 
 func (s AvroSerializer) ContentType() string { return "application/avro" }
 
-// Использование
 ob := outbox.New(db, AvroSerializer{schema: "..."})
 ```
 
 ## Маппер событий (`EventMapper`)
 
-`EventMapper` — опциональный хук, который позволяет преобразовать `Event` непосредственно перед его сериализацией и записью в БД. Удобен для обогащения заголовков, нормализации полей или добавления сквозных метаданных без изменения бизнес-кода.
-
-Маппер вызывается **после** инъекции трассировочного контекста и **до** сериализации payload.
+`EventMapper` — опциональный хук для преобразования `Event` непосредственно
+перед сериализацией и записью в БД. Вызывается **после** инъекции трассировочного
+контекста и **до** сериализации payload.
 
 ```go
-// EventMapper — это функция вида func(Event) Event.
 store := outbox.NewEventStore(serializer.JSONSerializer{}).
     WithMapper(func(e outbox.Event) outbox.Event {
         if e.Headers == nil {
@@ -186,20 +261,10 @@ store := outbox.NewEventStore(serializer.JSONSerializer{}).
     })
 ```
 
-Через фасад `Outbox`:
-
-```go
-ob := outbox.New(db, serializer.JSONSerializer{})
-store := ob.EventStore().WithMapper(func(e outbox.Event) outbox.Event {
-    e.EventType = strings.ToLower(e.EventType)
-    return e
-})
-```
-
 `WithMapper` возвращает тот же `*EventStore`, поэтому вызовы можно цепочкой.
 Если маппер не задан, поведение не изменяется.
 
-## Конфигурация Диспетчера (`Dispatcher`)
+## Конфигурация `Dispatcher`
 
 ```go
 dispatcher, err := ob.Dispatcher(
@@ -211,22 +276,35 @@ if err != nil {
     // ...
 }
 
+// Start блокируется до отмены ctx или Stop().
 go dispatcher.Start(context.Background())
 ```
 
-### Опции `Dispatcher`:
+### Опции
 
--   `WithPollInterval(time.Duration)`: Интервал опроса таблицы `outbox_events`. (По умолчанию: 2 секунды)
--   `WithBatchSize(int)`: Количество событий за один запрос. Диапазон: 1–10000. (По умолчанию: 100)
--   `WithMaxAttempts(int)`: Максимальное количество попыток отправки. (По умолчанию: 3)
--   `WithBackoffStrategy(BackoffStrategy)`: Стратегия задержки между повторными попытками.
--   `WithPublisher(Publisher)`: Собственная реализация `Publisher`.
--   `WithKafkaConfig(KafkaConfig)`: Создаёт `KafkaPublisher` с переданной конфигурацией.
--   `WithLogger(*zap.Logger)`: Настройка логирования.
--   `WithMetrics(MetricsCollector)`: Подключение коллектора метрик (например, OpenTelemetry).
--   `WithStuckEventTimeout(time.Duration)`: Время, после которого событие в статусе "в обработке" считается зависшим. (По умолчанию: 10 минут)
--   `WithCleanupInterval(time.Duration)`: Интервал запуска воркера очистки. (По умолчанию: 1 час)
--   `WithSentEventsRetention(time.Duration)`: Время хранения успешно отправленных событий. (По умолчанию: 24 часа)
+-   `WithPollInterval(time.Duration)`: интервал reconcile-цикла лидера и
+    интервал, с которым standby-инстансы пытаются переизбраться. (2 секунды)
+-   `WithBatchSize(int)`: количество событий за один тик, 1–10000. (100)
+-   `WithMaxAttempts(int)`: максимум попыток публикации перед dead-letter. (3)
+-   `WithProcessingLeaseTimeout(time.Duration)`: сколько событие может провисеть
+    в статусе "в обработке" (например, после падения лидера), прежде чем будет
+    переклеймлено в том же reconcile-запросе. (60 секунд)
+-   `WithLockName(string)`: имя advisory-лока для выбора лидера. По умолчанию
+    выводится из имени схемы БД.
+-   `WithBackoffStrategy(BackoffStrategy)`: стратегия задержки между ретраями.
+-   `WithPublisher(Publisher)`: собственная реализация `Publisher`.
+-   `WithKafkaConfig(KafkaConfig)`: создаёт `KafkaPublisher` с переданной
+    конфигурацией.
+-   `WithLogger(*zap.Logger)`: логирование.
+-   `WithMetrics(MetricsCollector)`: коллектор метрик (по умолчанию — OTel).
+
+### Проверка лидерства
+
+```go
+if dispatcher.IsLeader() {
+    // текущий процесс сейчас активно публикует события
+}
+```
 
 ## Конфигурация `KafkaPublisher`
 
@@ -243,101 +321,107 @@ if err != nil {
 dispatcher, err := ob.Dispatcher(outbox.WithPublisher(publisher))
 ```
 
-### Опции `KafkaConfig`:
+`DefaultKafkaConfig()` настроен для сохранения порядка и надёжной доставки:
 
--   `Topic`: Топик по умолчанию (используется, если топик не задан в событии).
--   `ProducerProps`: Параметры нативного Kafka-продюсера (`confluent-kafka-go`): `bootstrap.servers`, `acks`, `compression.type` и т.д.
--   `HeaderBuilder`: Функция для создания заголовков Kafka-сообщения.
+```go
+kafka.ConfigMap{
+    "enable.idempotence":                    true,
+    "acks":                                  "all",
+    "max.in.flight.requests.per.connection": 5, // максимум при enable.idempotence=true
+    "retries":                                2147483647, // ограничено delivery.timeout.ms, не числом попыток
+    "retry.backoff.ms":                       100,
+    "delivery.timeout.ms":                    120000,
+    "linger.ms":                               10,
+    "compression.type":                       "snappy",
+}
+```
+
+`max.in.flight.requests.per.connection=5` — не рекомендация, а требование
+librdkafka при `enable.idempotence=true` (значения больше 5 недопустимы).
+Ретраи не ограничиваются малым числом попыток — это противоречило бы
+идемпотентности; общее время на доставку одного сообщения ограничивается
+`delivery.timeout.ms`.
+
+### Опции `KafkaConfig`
+
+-   `Topic`: топик по умолчанию (используется, если топик не задан в событии).
+-   `ProducerProps`: параметры нативного Kafka-продюсера (`confluent-kafka-go`).
+-   `HeaderBuilder`: функция для создания заголовков Kafka-сообщения.
 
 ### Заголовки Kafka
 
-Каждое сообщение автоматически получает заголовки: `event_id`, `event_type`, `aggregate_type`, `aggregate_id`, `content-type`. Дополнительные заголовки передаются через `Event.Headers`.
-
-Системные заголовки защищены от переопределения пользовательскими данными.
-
-**Пример пользовательского `HeaderBuilder`:**
-
-```go
-func myHeaderBuilder(record outbox.EventRecord) []kafka.Header {
-    headers := outbox.BuildKafkaHeaders(record)
-    headers = append(headers, kafka.Header{
-        Key:   "X-Custom-Header",
-        Value: []byte("my-value"),
-    })
-    return headers
-}
-
-kafkaConfig := outbox.KafkaConfig{
-    HeaderBuilder: myHeaderBuilder,
-}
-```
+Каждое сообщение автоматически получает заголовки: `event_id`, `event_type`,
+`aggregate_type`, `aggregate_id`, `content-type`. Дополнительные заголовки
+передаются через `Event.Headers`, включая трассировочный контекст (`traceparent`
+и т.п.), пробрасываемый автоматически при сохранении события. Системные
+заголовки защищены от переопределения пользовательскими данными.
 
 ## Публикация сообщений и выбор топика
 
 1.  **Приоритет у события**: если `Topic` задан в событии, сообщение идёт в него.
-
-    ```go
-    store.Save(ctx, tx, outbox.Event{Topic: "user-events", Payload: data, ...})
-    ```
-
 2.  **Топик по умолчанию**: если `Topic` пустой, используется `KafkaConfig.Topic`.
 
-## Миграция с v2 на v3
+## Трассировка
+
+При сохранении события (`EventStore.Save`/`SaveWithDB`) активный OTel-контекст
+из `ctx` пробрасывается в `Event.Headers` (`traceparent` и т.п.) через
+глобальный `TextMapPropagator`, а при публикации — переносится в заголовки
+Kafka-сообщения без изменений. Потребитель на другом конце Kafka может
+извлечь эти заголовки и создать спан, **связанный** с сохранённым контекстом
+(а не дочерний — между записью в БД и доставкой в Kafka проходит время,
+обычная родитель/потомок-семантика здесь не применима).
+
+## Миграция с v3 на v4
 
 ### Установка
 
 ```bash
-go get github.com/overtonx/outbox/v3
+go get github.com/overtonx/outbox/v4
 ```
-
-Замените импорты:
 
 ```go
 // было
-import "github.com/overtonx/outbox/v2"
+import "github.com/overtonx/outbox/v3"
 
 // стало
 import (
-    "github.com/overtonx/outbox/v3"
-    "github.com/overtonx/outbox/v3/serializer"
+    "github.com/overtonx/outbox/v4"
+    "github.com/overtonx/outbox/v4/serializer"
 )
 ```
 
-### Изменения схемы БД
+### Убрано
 
-Колонка `payload` переведена из `JSON` в `LONGBLOB`. Добавлена колонка `content_type`.
+-   Отдельные воркеры и опции `CleanupService`/`WithCleanupInterval`,
+    `WithSentEventsRetention`, `WithDeadLetterRetention` — очистка старых
+    записей больше не встроена, см. раздел "Очистка старых событий" выше.
+-   Отдельный воркер `StuckEventService`/`WithStuckEventTimeout`/
+    `WithStuckEventCheckInterval` — восстановление зависших событий теперь
+    часть обычного claim-запроса, см. `WithProcessingLeaseTimeout`.
+-   `PrometheusMetricsCollector` — был пустой заглушкой без интеграции с
+    Prometheus. Используйте `MetricsCollector` (OTel) — вывод в Prometheus
+    настраивается на уровне `MeterProvider` хост-приложения.
+-   Deprecated-функция `outbox.SaveEvent` — используйте `EventStore.Save`/`SaveWithDB`.
+-   `Dispatcher.GetMetrics()` — используйте `WithMetrics`/`WithLogger` для
+    наблюдаемости и `IsLeader()` для проверки текущего статуса лидера.
 
-```sql
-ALTER TABLE outbox_events
-    MODIFY COLUMN payload LONGBLOB NOT NULL,
-    ADD COLUMN content_type VARCHAR(100) NOT NULL DEFAULT 'application/json' AFTER topic;
+### Изменено
 
-ALTER TABLE outbox_deadletters
-    MODIFY COLUMN payload LONGBLOB NOT NULL,
-    ADD COLUMN content_type VARCHAR(100) NOT NULL DEFAULT 'application/json' AFTER topic;
-```
+-   `Dispatcher.Start(ctx)` теперь возвращает `error` и блокируется до отмены
+    `ctx` или вызова `Stop()` (было: ничего не возвращал, обычно вызывался
+    через `go dispatcher.Start(ctx)` — так и осталось, просто проверяйте
+    ошибку).
+-   `Dispatcher.IsStarted()` заменён на `Dispatcher.IsLeader()` — при нескольких
+    инстансах "запущен" и "активно публикует" не одно и то же.
+-   Схема БД теперь версионированные `.sql`-миграции
+    (`github.com/overtonx/outbox/v4/migrations`), а не `CREATE TABLE IF NOT
+    EXISTS` в Go-строках — структура таблиц не изменилась.
+-   `DefaultKafkaConfig()` теперь явно выставляет
+    `max.in.flight.requests.per.connection=5` и не ограничивает `retries`
+    маленьким числом — см. раздел про Kafka-конфигурацию выше.
 
-> **Важно:** выполните миграцию в обслуживающем окне. После изменения типа `payload` откат потребует повторного преобразования данных.
+### Новое
 
-### Изменения API
-
-**Было (v2):**
-
-```go
-err := outbox.SaveEvent(ctx, tx, event)
-
-dispatcher, err := outbox.NewDispatcher(db, outbox.WithLogger(logger))
-```
-
-**Стало (v3):**
-
-```go
-ob := outbox.New(db, serializer.JSONSerializer{})
-
-store := ob.EventStore()
-err := store.SaveWithDB(ctx, tx, event)
-
-dispatcher, err := ob.Dispatcher(outbox.WithLogger(logger))
-```
-
-`SaveEvent` продолжает работать — ломающих изменений нет, но функция будет удалена в v4.
+-   Безопасный запуск нескольких инстансов `Dispatcher` против одной БД —
+    см. "Гарантия порядка при нескольких инстансах".
+-   `WithLockName`, `WithProcessingLeaseTimeout`.

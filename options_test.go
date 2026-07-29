@@ -54,52 +54,31 @@ func TestWithMaxAttempts_Invalid(t *testing.T) {
 	}
 }
 
-func TestWithDeadLetterInterval(t *testing.T) {
+func TestWithProcessingLeaseTimeout(t *testing.T) {
 	opts := &dispatcherOptions{}
-	interval := 10 * time.Minute
-	err := WithDeadLetterInterval(interval)(opts)
+	timeout := 90 * time.Second
+	err := WithProcessingLeaseTimeout(timeout)(opts)
 	assert.NoError(t, err)
-	assert.Equal(t, interval, opts.deadLetterInterval)
+	assert.Equal(t, timeout, opts.processingLeaseTimeout)
 }
 
-func TestWithStuckEventTimeout(t *testing.T) {
-	opts := &dispatcherOptions{}
-	timeout := 15 * time.Minute
-	err := WithStuckEventTimeout(timeout)(opts)
-	assert.NoError(t, err)
-	assert.Equal(t, timeout, opts.stuckEventTimeout)
+func TestWithProcessingLeaseTimeout_Invalid(t *testing.T) {
+	for _, d := range []time.Duration{0, -time.Second} {
+		opts := &dispatcherOptions{}
+		assert.Error(t, WithProcessingLeaseTimeout(d)(opts), "expected error for timeout %s", d)
+	}
 }
 
-func TestWithStuckEventCheckInterval(t *testing.T) {
+func TestWithLockName(t *testing.T) {
 	opts := &dispatcherOptions{}
-	interval := 3 * time.Minute
-	err := WithStuckEventCheckInterval(interval)(opts)
+	err := WithLockName("custom-lock")(opts)
 	assert.NoError(t, err)
-	assert.Equal(t, interval, opts.stuckEventCheckInterval)
+	assert.Equal(t, "custom-lock", opts.lockName)
 }
 
-func TestWithDeadLetterRetention(t *testing.T) {
+func TestWithLockName_Invalid(t *testing.T) {
 	opts := &dispatcherOptions{}
-	retention := 14 * 24 * time.Hour
-	err := WithDeadLetterRetention(retention)(opts)
-	assert.NoError(t, err)
-	assert.Equal(t, retention, opts.deadLetterRetention)
-}
-
-func TestWithSentEventsRetention(t *testing.T) {
-	opts := &dispatcherOptions{}
-	retention := 48 * time.Hour
-	err := WithSentEventsRetention(retention)(opts)
-	assert.NoError(t, err)
-	assert.Equal(t, retention, opts.sentEventsRetention)
-}
-
-func TestWithCleanupInterval(t *testing.T) {
-	opts := &dispatcherOptions{}
-	interval := 2 * time.Hour
-	err := WithCleanupInterval(interval)(opts)
-	assert.NoError(t, err)
-	assert.Equal(t, interval, opts.cleanupInterval)
+	assert.Error(t, WithLockName("")(opts))
 }
 
 func TestWithBackoffStrategy(t *testing.T) {
@@ -160,23 +139,34 @@ func TestMultipleOptions(t *testing.T) {
 	metrics := NewNoOpMetricsCollector()
 	strategy := NewFixedBackoffStrategy(1 * time.Second)
 
-	err := WithBatchSize(25)(opts)
-	assert.NoError(t, err)
-	err = WithPollInterval(3 * time.Second)(opts)
-	assert.NoError(t, err)
-	err = WithMaxAttempts(7)(opts)
-	assert.NoError(t, err)
-	err = WithLogger(logger)(opts)
-	assert.NoError(t, err)
-	err = WithMetrics(metrics)(opts)
-	assert.NoError(t, err)
-	err = WithBackoffStrategy(strategy)(opts)
-	assert.NoError(t, err)
+	assert.NoError(t, WithBatchSize(25)(opts))
+	assert.NoError(t, WithPollInterval(3*time.Second)(opts))
+	assert.NoError(t, WithMaxAttempts(7)(opts))
+	assert.NoError(t, WithProcessingLeaseTimeout(45*time.Second)(opts))
+	assert.NoError(t, WithLockName("my-lock")(opts))
+	assert.NoError(t, WithLogger(logger)(opts))
+	assert.NoError(t, WithMetrics(metrics)(opts))
+	assert.NoError(t, WithBackoffStrategy(strategy)(opts))
 
 	assert.Equal(t, 25, opts.batchSize)
 	assert.Equal(t, 3*time.Second, opts.pollInterval)
 	assert.Equal(t, 7, opts.maxAttempts)
+	assert.Equal(t, 45*time.Second, opts.processingLeaseTimeout)
+	assert.Equal(t, "my-lock", opts.lockName)
 	assert.Equal(t, logger, opts.logger)
 	assert.Equal(t, metrics, opts.metrics)
 	assert.Equal(t, strategy, opts.backoffStrategy)
+}
+
+func TestDefaultDispatcherOptions(t *testing.T) {
+	opts := defaultDispatcherOptions()
+
+	assert.Equal(t, defaultBatchSize, opts.batchSize)
+	assert.Equal(t, defaultPollInterval, opts.pollInterval)
+	assert.Equal(t, defaultMaxAttempts, opts.maxAttempts)
+	assert.Equal(t, defaultProcessingLeaseTimeout, opts.processingLeaseTimeout)
+	assert.Empty(t, opts.lockName)
+	assert.NotNil(t, opts.backoffStrategy)
+	assert.NotNil(t, opts.metrics)
+	assert.NotNil(t, opts.logger)
 }

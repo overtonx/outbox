@@ -3,104 +3,48 @@ package outbox
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/overtonx/outbox/v4/migrations"
 	"go.uber.org/zap"
 )
 
-const (
-	EventRecordStatusNew        = 0
-	EventRecordStatusSent       = 1
-	EventRecordStatusRetry      = 2
-	EventRecordStatusError      = 3
-	EventRecordStatusProcessing = 4
-)
-
-const (
-	defaultBatchSize               = 100
-	defaultPollInterval            = 2 * time.Second
-	defaultMaxAttempts             = 3
-	defaultBaseDelay               = 1 * time.Minute
-	defaultMaxDelay                = 30 * time.Minute
-	defaultDeadLetterInterval      = 5 * time.Minute
-	defaultStuckEventTimeout       = 10 * time.Minute
-	defaultStuckEventCheckInterval = 2 * time.Minute
-	defaultDeadLetterRetention     = 7 * 24 * time.Hour
-	defaultSentEventsRetention     = 24 * time.Hour
-	defaultCleanupInterval         = 1 * time.Hour
-)
-
+// Dispatcher читает неотправленные события из outbox_events и публикует их
+// в Kafka. При нескольких работающих инстансах Dispatcher (например,
+// несколько подов одного сервиса) активно клеймит и публикует ровно один
+// лидер, выбранный через MySQL advisory-лок (см. leader.go) — это гарантирует
+// глобальный порядок публикации. Каждый тик лидер выполняет один
+// claim+publish цикл (claim.go/publish.go), затем переносит события,
+// исчерпавшие попытки, в outbox_deadletters (deadletter.go).
 type Dispatcher struct {
-	eventProcessor    EventProcessor
-	deadLetterService DeadLetterService
-	stuckEventService StuckEventService
-	cleanupService    CleanupService
-	publisher         Publisher
-	metrics           MetricsCollector
-	logger            *zap.Logger
+	db      *sql.DB
+	elector *leaderElector
 
-	workers                 []Worker
-	batchSize               int
-	pollInterval            time.Duration
-	maxAttempts             int
-	deadLetterInterval      time.Duration
-	stuckEventTimeout       time.Duration
-	stuckEventCheckInterval time.Duration
-	deadLetterRetention     time.Duration
-	sentEventsRetention     time.Duration
-	cleanupInterval         time.Duration
+	publisher       Publisher
+	metrics         MetricsCollector
+	backoffStrategy BackoffStrategy
+	logger          *zap.Logger
 
-	mu       sync.RWMutex
-	started  bool
-	stopChan chan struct{}
+	batchSize              int
+	pollInterval           time.Duration
+	maxAttempts            int
+	processingLeaseTimeout time.Duration
+	lockName               string
+
+	mu      sync.RWMutex
+	started bool
+	leading bool
+	cancel  context.CancelFunc
 }
 
-type EventRecord struct {
-	ID            int64
-	AggregateType string
-	AggregateID   string
-	EventID       string
-	EventType     string
-	ContentType   string
-	Payload       []byte
-	Headers       []byte
-	Topic         string
-	AttemptCount  int
-	NextAttemptAt *time.Time
-}
-
-type DeadLetterRecord struct {
-	ID            int64
-	EventID       string
-	EventType     string
-	AggregateType string
-	AggregateID   string
-	Topic         string
-	ContentType   string
-	Payload       []byte
-	Headers       []byte
-	AttemptCount  int
-	LastError     string
-	CreatedAt     time.Time
-}
-
+// NewDispatcher создаёт Dispatcher, применяет встроенные миграции схемы
+// outbox (migrations.Migrate) и настраивает Kafka-публикацию по умолчанию,
+// если Publisher не передан явно через WithPublisher/WithKafkaConfig.
 func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
-	options := &dispatcherOptions{
-		batchSize:               defaultBatchSize,
-		pollInterval:            defaultPollInterval,
-		maxAttempts:             defaultMaxAttempts,
-		deadLetterInterval:      defaultDeadLetterInterval,
-		stuckEventTimeout:       defaultStuckEventTimeout,
-		stuckEventCheckInterval: defaultStuckEventCheckInterval,
-		deadLetterRetention:     defaultDeadLetterRetention,
-		sentEventsRetention:     defaultSentEventsRetention,
-		cleanupInterval:         defaultCleanupInterval,
-		backoffStrategy:         DefaultBackoffStrategy(),
-		metrics:                 NewOpenTelemetryMetricsCollector(),
-		logger:                  zap.NewNop(),
-	}
+	options := defaultDispatcherOptions()
 
 	for _, opt := range opts {
 		if err := opt(options); err != nil {
@@ -116,153 +60,134 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		}
 	}
 
-	if err := ensureOutboxTable(context.Background(), db); err != nil {
-		return nil, fmt.Errorf("failed to create outbox tables: %w", err)
+	ctx := context.Background()
+
+	if err := migrations.Migrate(ctx, db); err != nil {
+		return nil, fmt.Errorf("failed to apply outbox migrations: %w", err)
 	}
 
-	eventProcessor := NewEventProcessor(
-		db,
-		options.logger,
-		options.backoffStrategy,
-		options.maxAttempts,
-		options.batchSize,
-		options.publisher,
-		options.metrics,
-	)
-
-	deadLetterService := NewDeadLetterService(
-		db,
-		options.logger,
-		options.batchSize,
-		options.metrics,
-	)
-
-	stuckEventService := NewStuckEventService(
-		db,
-		options.logger,
-		options.backoffStrategy,
-		options.maxAttempts,
-		options.batchSize,
-		options.stuckEventTimeout,
-		options.metrics,
-	)
-
-	cleanupService := NewCleanupService(
-		db,
-		options.logger,
-		options.batchSize,
-		options.deadLetterRetention,
-		options.sentEventsRetention,
-		options.metrics,
-	)
-
-	workers := []Worker{
-		NewBaseWorker("event_processor", options.pollInterval, options.logger, eventProcessor.ProcessEvents),
-		NewBaseWorker("deadletter_processor", options.deadLetterInterval, options.logger, deadLetterService.MoveToDeadLetters),
-		NewBaseWorker("stuck_events_processor", options.stuckEventCheckInterval, options.logger, stuckEventService.RecoverStuckEvents),
-		NewBaseWorker("cleanup_processor", options.cleanupInterval, options.logger, cleanupService.Cleanup),
+	lockName := options.lockName
+	if lockName == "" {
+		var err error
+		lockName, err = defaultLockName(ctx, db)
+		if err != nil {
+			return nil, fmt.Errorf("failed to determine leader lock name: %w", err)
+		}
 	}
 
 	return &Dispatcher{
-		eventProcessor:          eventProcessor,
-		deadLetterService:       deadLetterService,
-		stuckEventService:       stuckEventService,
-		cleanupService:          cleanupService,
-		publisher:               options.publisher,
-		metrics:                 options.metrics,
-		logger:                  options.logger,
-		workers:                 workers,
-		batchSize:               options.batchSize,
-		pollInterval:            options.pollInterval,
-		maxAttempts:             options.maxAttempts,
-		deadLetterInterval:      options.deadLetterInterval,
-		stuckEventTimeout:       options.stuckEventTimeout,
-		stuckEventCheckInterval: options.stuckEventCheckInterval,
-		deadLetterRetention:     options.deadLetterRetention,
-		sentEventsRetention:     options.sentEventsRetention,
-		cleanupInterval:         options.cleanupInterval,
-		stopChan:                make(chan struct{}),
+		db:                     db,
+		elector:                newLeaderElector(db, lockName, options.logger),
+		publisher:              options.publisher,
+		metrics:                options.metrics,
+		backoffStrategy:        options.backoffStrategy,
+		logger:                 options.logger,
+		batchSize:              options.batchSize,
+		pollInterval:           options.pollInterval,
+		maxAttempts:            options.maxAttempts,
+		processingLeaseTimeout: options.processingLeaseTimeout,
+		lockName:               lockName,
 	}, nil
 }
 
-func (d *Dispatcher) Start(ctx context.Context) {
+// Start блокируется до отмены ctx или вызова Stop(). Внутри — цикл выбора
+// лидера (leader.go); пока текущий процесс лидер, каждые pollInterval
+// выполняется reconcile-тик (claim → publish → move dead letters).
+func (d *Dispatcher) Start(ctx context.Context) error {
 	d.mu.Lock()
 	if d.started {
 		d.mu.Unlock()
-		d.logger.Warn("Dispatcher already started")
-		return
+		return fmt.Errorf("outbox: dispatcher already started")
 	}
 	d.started = true
+	runCtx, cancel := context.WithCancel(ctx)
+	d.cancel = cancel
 	d.mu.Unlock()
 
-	d.logger.Info("Starting outbox dispatcher",
+	d.logger.Info("outbox: starting dispatcher",
 		zap.Int("batch_size", d.batchSize),
 		zap.Duration("poll_interval", d.pollInterval),
 		zap.Int("max_attempts", d.maxAttempts),
-		zap.Duration("deadletter_interval", d.deadLetterInterval),
-		zap.Duration("stuck_event_timeout", d.stuckEventTimeout),
-		zap.Duration("stuck_event_check_interval", d.stuckEventCheckInterval),
-		zap.Duration("deadletter_retention", d.deadLetterRetention),
-		zap.Duration("sent_events_retention", d.sentEventsRetention),
-		zap.Duration("cleanup_interval", d.cleanupInterval),
+		zap.Duration("processing_lease_timeout", d.processingLeaseTimeout),
+		zap.String("lock_name", d.lockName),
 	)
 
-	for _, worker := range d.workers {
-		go worker.Start(ctx)
-	}
+	err := d.elector.run(runCtx, d.pollInterval, d.runAsLeader)
 
-	select {
-	case <-ctx.Done():
-		d.logger.Info("Context cancelled, stopping dispatcher")
-	case <-d.stopChan:
-		d.logger.Info("Stop signal received, stopping dispatcher")
-	}
-
-	for _, worker := range d.workers {
-		worker.Stop()
-	}
-
-	if err := d.publisher.Close(); err != nil {
-		d.logger.Error("Failed to close publisher", zap.Error(err))
+	if closeErr := d.publisher.Close(); closeErr != nil {
+		d.logger.Error("outbox: failed to close publisher", zap.Error(closeErr))
 	}
 
 	d.mu.Lock()
 	d.started = false
 	d.mu.Unlock()
+
+	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return err
+	}
+	return nil
 }
 
+// Stop инициирует штатную остановку Dispatcher; Start вернётся после того,
+// как текущий reconcile-тик (если он выполняется) завершится и лидерский
+// лок будет освобождён.
 func (d *Dispatcher) Stop() {
 	d.mu.RLock()
-	if !d.started {
-		d.mu.RUnlock()
-		return
-	}
+	cancel := d.cancel
 	d.mu.RUnlock()
 
-	d.logger.Info("Stopping outbox dispatcher...")
-	close(d.stopChan)
+	if cancel != nil {
+		d.logger.Info("outbox: stopping dispatcher...")
+		cancel()
+	}
 }
 
-func (d *Dispatcher) IsStarted() bool {
+// IsLeader сообщает, является ли текущий процесс активным лидером прямо
+// сейчас (то есть именно он клеймит и публикует события).
+func (d *Dispatcher) IsLeader() bool {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return d.started
+	return d.leading
 }
 
-func (d *Dispatcher) GetMetrics() map[string]interface{} {
-	return map[string]interface{}{
-		"started": d.IsStarted(),
-		"workers": len(d.workers),
-		"config": map[string]interface{}{
-			"batch_size":                 d.batchSize,
-			"poll_interval":              d.pollInterval,
-			"max_attempts":               d.maxAttempts,
-			"deadletter_interval":        d.deadLetterInterval,
-			"stuck_event_timeout":        d.stuckEventTimeout,
-			"stuck_event_check_interval": d.stuckEventCheckInterval,
-			"deadletter_retention":       d.deadLetterRetention,
-			"sent_events_retention":      d.sentEventsRetention,
-			"cleanup_interval":           d.cleanupInterval,
-		},
+func (d *Dispatcher) setLeading(v bool) {
+	d.mu.Lock()
+	d.leading = v
+	d.mu.Unlock()
+}
+
+// runAsLeader выполняется, пока текущий процесс держит лидерский лок:
+// немедленный reconcile-тик при получении лидерства, затем один тик на
+// каждый pollInterval, пока leaderCtx не будет отменён.
+func (d *Dispatcher) runAsLeader(ctx context.Context) {
+	d.setLeading(true)
+	defer d.setLeading(false)
+
+	d.reconcileOnce(ctx)
+
+	ticker := time.NewTicker(d.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			d.reconcileOnce(ctx)
+		}
+	}
+}
+
+func (d *Dispatcher) reconcileOnce(ctx context.Context) {
+	events, err := d.claimBatch(ctx)
+	if err != nil {
+		d.logger.Error("outbox: failed to claim events", zap.Error(err))
+		return
+	}
+
+	d.publishBatch(ctx, events)
+
+	if err := d.moveDeadLetters(ctx); err != nil {
+		d.logger.Error("outbox: failed to move exhausted events to deadletters", zap.Error(err))
 	}
 }

@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
 
@@ -10,10 +11,20 @@ import (
 	trmcontext "github.com/avito-tech/go-transaction-manager/trm/v2/context"
 	trmmanager "github.com/avito-tech/go-transaction-manager/trm/v2/manager"
 	"github.com/go-sql-driver/mysql"
-	"github.com/overtonx/outbox/v3/serializer"
+	"github.com/overtonx/outbox/v4/serializer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
+
+type MockDBExecutor struct {
+	mock.Mock
+}
+
+func (m *MockDBExecutor) ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {
+	arguments := m.Called(ctx, query, args)
+	res, _ := arguments.Get(0).(sql.Result)
+	return res, arguments.Error(1)
+}
 
 func TestEventStore_Save_Success(t *testing.T) {
 	ctx := context.Background()
