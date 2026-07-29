@@ -110,3 +110,62 @@ func (d *Dispatcher) claimBatch(ctx context.Context) ([]EventRecord, error) {
 
 	return events, nil
 }
+
+// claimByWatermark читает следующие до limit событий строго после afterID
+// (глобальный монотонный id, а не built-in статус) — используется вместо
+// claimBatch для Publisher'ов, реализующих OrderedPublisher. В отличие от
+// claimBatch, здесь нет разбора по new/retry/processing-lease: единственный
+// источник истины для продолжения потока — чекпоинт (afterID), поэтому
+// строки не нужно транзакционно помечать статусом при клейминге — это чтение
+// идемпотентно и безопасно повторять.
+func (d *Dispatcher) claimByWatermark(ctx context.Context, afterID int64, limit int) ([]EventRecord, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+
+	rows, err := d.db.QueryContext(ctx, `
+		SELECT id, event_id, event_type, aggregate_type, aggregate_id, topic,
+		       content_type, payload, headers, attempt_count, next_attempt_at
+		FROM outbox_events
+		WHERE id > ?
+		ORDER BY id ASC
+		LIMIT ?
+	`, afterID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query events after checkpoint: %w", err)
+	}
+	defer rows.Close()
+
+	var events []EventRecord
+	for rows.Next() {
+		var event EventRecord
+		var nextAttemptAt sql.NullTime
+
+		if err := rows.Scan(
+			&event.ID,
+			&event.EventID,
+			&event.EventType,
+			&event.AggregateType,
+			&event.AggregateID,
+			&event.Topic,
+			&event.ContentType,
+			&event.Payload,
+			&event.Headers,
+			&event.AttemptCount,
+			&nextAttemptAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan event after checkpoint: %w", err)
+		}
+
+		if nextAttemptAt.Valid {
+			event.NextAttemptAt = &nextAttemptAt.Time
+		}
+
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to iterate events after checkpoint: %w", err)
+	}
+
+	return events, nil
+}

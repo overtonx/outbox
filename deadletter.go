@@ -130,3 +130,86 @@ func (d *Dispatcher) moveDeadLetters(ctx context.Context) error {
 
 	return nil
 }
+
+// moveSingleToDeadLetter переносит ровно одно событие (по id) в
+// outbox_deadletters с явно переданной причиной. Используется только
+// ordered-путём Dispatcher'а (см. ordering.go) как крайняя мера — когда одно
+// и то же событие подряд ломает поток через несколько циклов stop/replay
+// (poison message) и дальнейшее ожидание блокировало бы публикацию всех
+// последующих событий с сохранением порядка навсегда. В отличие от
+// moveDeadLetters (построчный retry/backoff путь), здесь нет отдельного
+// статуса error — событие уходит в deadletters напрямую из состояния
+// "следующее после чекпоинта".
+func (d *Dispatcher) moveSingleToDeadLetter(ctx context.Context, id int64, cause error) error {
+	tx, err := d.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return fmt.Errorf("failed to begin quarantine transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	query := `
+		SELECT id, event_id, event_type, aggregate_type, aggregate_id, topic,
+		       content_type, payload, headers, attempt_count, created_at
+		FROM outbox_events
+		WHERE id = ?
+		FOR UPDATE
+	`
+
+	var event DeadLetterRecord
+	if err := tx.QueryRowContext(ctx, query, id).Scan(
+		&event.ID,
+		&event.EventID,
+		&event.EventType,
+		&event.AggregateType,
+		&event.AggregateID,
+		&event.Topic,
+		&event.ContentType,
+		&event.Payload,
+		&event.Headers,
+		&event.AttemptCount,
+		&event.CreatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			// Событие уже отсутствует (например, унаследовано от прошлого
+			// запуска и было убрано вручную) — чекпоинт всё равно можно
+			// безопасно продвинуть мимо него.
+			return tx.Commit()
+		}
+		return fmt.Errorf("failed to load quarantined event %d: %w", id, err)
+	}
+	event.LastError = cause.Error()
+
+	insertQuery := `
+		INSERT INTO outbox_deadletters
+		(id, event_id, event_type, aggregate_type, aggregate_id, topic,
+		 content_type, payload, headers, attempt_count, last_error, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+	if _, err := tx.ExecContext(ctx, insertQuery,
+		event.ID,
+		event.EventID,
+		event.EventType,
+		event.AggregateType,
+		event.AggregateID,
+		event.Topic,
+		event.ContentType,
+		event.Payload,
+		event.Headers,
+		event.AttemptCount,
+		nullString(event.LastError),
+		event.CreatedAt,
+	); err != nil {
+		return fmt.Errorf("failed to insert quarantined event %d into deadletters: %w", id, err)
+	}
+
+	if _, err := tx.ExecContext(ctx, "DELETE FROM outbox_events WHERE id = ?", id); err != nil {
+		return fmt.Errorf("failed to delete quarantined event %d: %w", id, err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit quarantine transaction: %w", err)
+	}
+
+	d.metrics.IncrementCounter("outbox.deadletter.quarantined", nil)
+	return nil
+}

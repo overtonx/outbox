@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/confluentinc/confluent-kafka-go/v2/kafka"
 	"github.com/overtonx/outbox/v4/serializer"
@@ -71,7 +72,7 @@ func TestNewKafkaPublisher(t *testing.T) {
 
 	assert.NotNil(t, publisher, "Expected non-nil publisher")
 	assert.Equal(t, logger, publisher.logger, "Expected logger to match")
-	assert.NotNil(t, publisher.producer, "Expected non-nil producer")
+	assert.NotNil(t, publisher.producer.Load(), "Expected non-nil producer")
 	assert.Equal(t, "outbox-events", publisher.config.Topic, "Expected default topic 'outbox-events'")
 }
 
@@ -95,7 +96,7 @@ func TestNewKafkaPublisherWithConfig(t *testing.T) {
 
 	assert.NotNil(t, publisher, "Expected non-nil publisher")
 	assert.Equal(t, logger, publisher.logger, "Expected logger to match")
-	assert.NotNil(t, publisher.producer, "Expected non-nil producer")
+	assert.NotNil(t, publisher.producer.Load(), "Expected non-nil producer")
 	assert.Equal(t, config.Topic, publisher.config.Topic, "Expected topic to match")
 }
 
@@ -227,4 +228,102 @@ func TestBuildKafkaHeadersWithCustomHeaders(t *testing.T) {
 		assert.True(t, exists, "Unexpected header key: %s", header.Key)
 		assert.Equal(t, expectedValue, string(header.Value), "Header value mismatch")
 	}
+}
+
+// TestKafkaPublisher_ProduceRetriesOnQueueFull проверяет, что ErrQueueFull
+// не возвращается наружу как ошибка публикации, а обрабатывается циклом
+// ожидания-и-повтора: без реального брокера искусственно маленький
+// queue.buffering.max.messages=1 гарантирует, что второй Produce немедленно
+// упрётся в переполненную очередь, а короткий ctx-таймаут (короче, чем
+// message.timeout.ms) доказывает, что Publish реально ждал/повторял, а не
+// сразу вернул ошибку.
+func TestKafkaPublisher_ProduceRetriesOnQueueFull(t *testing.T) {
+	config := KafkaConfig{
+		Topic: "test-topic",
+		ProducerProps: kafka.ConfigMap{
+			"bootstrap.servers":            "localhost:1",
+			"queue.buffering.max.messages": 1,
+			"message.timeout.ms":           200,
+		},
+	}
+
+	publisher, err := NewKafkaPublisherWithConfig(zap.NewNop(), config)
+	assert.NoError(t, err)
+	defer publisher.Close()
+
+	err = publisher.Publish(context.Background(),
+		EventRecord{ID: 1, Topic: "test-topic", AggregateID: "a1", Payload: []byte("x")},
+		func(error) {})
+	assert.NoError(t, err, "first Produce should fit into the queue")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	err = publisher.Publish(ctx,
+		EventRecord{ID: 2, Topic: "test-topic", AggregateID: "a1", Payload: []byte("y")},
+		func(error) {})
+	elapsed := time.Since(start)
+
+	assert.Error(t, err)
+	assert.ErrorIs(t, err, context.DeadlineExceeded,
+		"backpressure loop must keep retrying until ctx is done, not fail fast with ErrQueueFull")
+	assert.GreaterOrEqual(t, elapsed, 25*time.Millisecond,
+		"should have actually waited/retried, not returned immediately")
+}
+
+// TestKafkaPublisher_FatalProducerErrorTriggersHandler проверяет, что
+// фатальная ошибка producer'а (librdkafka.TestFatalError имитирует реальный
+// сценарий fenced idempotent producer) доходит до onFatal, а не просто
+// логируется и игнорируется.
+func TestKafkaPublisher_FatalProducerErrorTriggersHandler(t *testing.T) {
+	publisher, err := NewKafkaPublisher(zap.NewNop())
+	assert.NoError(t, err)
+	defer publisher.Close()
+
+	faults := make(chan error, 1)
+	publisher.SetFatalHandler(func(err error) {
+		select {
+		case faults <- err:
+		default:
+		}
+	})
+
+	producer := publisher.producer.Load()
+	producer.TestFatalError(kafka.ErrInvalidTimestamp, "simulated fatal error")
+
+	select {
+	case err := <-faults:
+		assert.Error(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected onFatal to be called after a fatal producer error")
+	}
+}
+
+// TestKafkaPublisher_RecreateSwapsProducerAndPreservesWatermark проверяет,
+// что Recreate заменяет внутренний producer на новый рабочий инстанс, не
+// затрагивая при этом накопленный watermark (сброс watermark — отдельная,
+// явная операция SeedWatermark, которую выполняет Dispatcher после
+// перечитывания персистентного чекпоинта).
+func TestKafkaPublisher_RecreateSwapsProducerAndPreservesWatermark(t *testing.T) {
+	publisher, err := NewKafkaPublisher(zap.NewNop())
+	assert.NoError(t, err)
+	defer publisher.Close()
+
+	publisher.tracker.Ack(1)
+	publisher.tracker.Ack(2)
+	publisher.tracker.Ack(3)
+	publisher.tracker.Ack(4)
+	publisher.tracker.Ack(5)
+	assert.Equal(t, int64(5), publisher.Watermark())
+
+	before := publisher.producer.Load()
+	assert.NoError(t, publisher.Recreate())
+	after := publisher.producer.Load()
+
+	assert.NotSame(t, before, after, "Recreate must swap in a new producer instance")
+	assert.Equal(t, int64(5), publisher.Watermark(), "Recreate itself must not reset the watermark")
+
+	publisher.SeedWatermark(2)
+	assert.Equal(t, int64(2), publisher.Watermark(), "SeedWatermark is the explicit reset used for replay")
 }

@@ -94,3 +94,40 @@ func TestClaimBatch_QueryErrorRollsBack(t *testing.T) {
 	assert.Nil(t, events)
 	assert.NoError(t, mock_.ExpectationsWereMet())
 }
+
+func TestClaimByWatermark_QueriesStrictlyAfterID(t *testing.T) {
+	db, mock_, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	d := &Dispatcher{db: db, logger: zap.NewNop()}
+
+	rows := sqlmock.NewRows([]string{
+		"id", "event_id", "event_type", "aggregate_type", "aggregate_id", "topic",
+		"content_type", "payload", "headers", "attempt_count", "next_attempt_at",
+	}).AddRow(11, "evt-11", "order.created", "order", "order-1", "orders",
+		"application/json", []byte(`{}`), nil, 0, nil)
+
+	mock_.ExpectQuery("SELECT (.|\n)*FROM outbox_events(.|\n)*WHERE id > \\?(.|\n)*ORDER BY id ASC(.|\n)*LIMIT \\?").
+		WithArgs(int64(10), 5).
+		WillReturnRows(rows)
+
+	events, err := d.claimByWatermark(context.Background(), 10, 5)
+	assert.NoError(t, err)
+	assert.Len(t, events, 1)
+	assert.Equal(t, int64(11), events[0].ID)
+	assert.NoError(t, mock_.ExpectationsWereMet())
+}
+
+func TestClaimByWatermark_ZeroLimitDoesNotQuery(t *testing.T) {
+	db, mock_, err := sqlmock.New()
+	assert.NoError(t, err)
+	defer db.Close()
+
+	d := &Dispatcher{db: db, logger: zap.NewNop()}
+
+	events, err := d.claimByWatermark(context.Background(), 10, 0)
+	assert.NoError(t, err)
+	assert.Empty(t, events)
+	assert.NoError(t, mock_.ExpectationsWereMet())
+}
