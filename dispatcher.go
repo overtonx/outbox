@@ -34,6 +34,19 @@ type Dispatcher struct {
 	processingLeaseTimeout time.Duration
 	lockName               string
 
+	// ordered и checkpoints не nil, если publisher реализует
+	// OrderedPublisher (сейчас — только KafkaPublisher): тогда
+	// runAsLeader использует ordered-путь (ordering.go) — единый
+	// глобальный чекпоинт по непрерывному префиксу вместо построчного
+	// status/retry/backoff. Для любого другого Publisher (NopPublisher,
+	// пользовательские реализации, тестовые двойники) используется прежняя
+	// модель без изменений.
+	ordered                 OrderedPublisher
+	checkpoints             *checkpointStore
+	inFlightWindow          int
+	checkpointFlushInterval time.Duration
+	poisonMessageThreshold  int
+
 	mu      sync.RWMutex
 	started bool
 	leading bool
@@ -75,19 +88,29 @@ func NewDispatcher(db *sql.DB, opts ...DispatcherOption) (*Dispatcher, error) {
 		}
 	}
 
-	return &Dispatcher{
-		db:                     db,
-		elector:                newLeaderElector(db, lockName, options.logger),
-		publisher:              options.publisher,
-		metrics:                options.metrics,
-		backoffStrategy:        options.backoffStrategy,
-		logger:                 options.logger,
-		batchSize:              options.batchSize,
-		pollInterval:           options.pollInterval,
-		maxAttempts:            options.maxAttempts,
-		processingLeaseTimeout: options.processingLeaseTimeout,
-		lockName:               lockName,
-	}, nil
+	d := &Dispatcher{
+		db:                      db,
+		elector:                 newLeaderElector(db, lockName, options.logger),
+		publisher:               options.publisher,
+		metrics:                 options.metrics,
+		backoffStrategy:         options.backoffStrategy,
+		logger:                  options.logger,
+		batchSize:               options.batchSize,
+		pollInterval:            options.pollInterval,
+		maxAttempts:             options.maxAttempts,
+		processingLeaseTimeout:  options.processingLeaseTimeout,
+		lockName:                lockName,
+		inFlightWindow:          options.inFlightWindow,
+		checkpointFlushInterval: options.checkpointFlushInterval,
+		poisonMessageThreshold:  options.poisonMessageThreshold,
+	}
+
+	if ordered, ok := options.publisher.(OrderedPublisher); ok {
+		d.ordered = ordered
+		d.checkpoints = newCheckpointStore(db)
+	}
+
+	return d, nil
 }
 
 // Start блокируется до отмены ctx или вызова Stop(). Внутри — цикл выбора
@@ -162,6 +185,11 @@ func (d *Dispatcher) setLeading(v bool) {
 func (d *Dispatcher) runAsLeader(ctx context.Context) {
 	d.setLeading(true)
 	defer d.setLeading(false)
+
+	if d.ordered != nil {
+		d.runOrderedLeader(ctx)
+		return
+	}
 
 	d.reconcileOnce(ctx)
 

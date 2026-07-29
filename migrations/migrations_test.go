@@ -26,6 +26,14 @@ func TestMigrate_AppliesUnappliedMigrationAndRecordsVersion(t *testing.T) {
 	mock_.ExpectExec("INSERT INTO outbox_schema_migrations \\(version\\) VALUES \\(\\?\\)").
 		WithArgs("0001_init.sql").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock_.ExpectQuery("SELECT 1 FROM outbox_schema_migrations WHERE version = \\?").
+		WithArgs("0002_checkpoints.sql").
+		WillReturnRows(sqlmock.NewRows([]string{"1"}))
+	mock_.ExpectExec("CREATE TABLE IF NOT EXISTS outbox_checkpoints").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock_.ExpectExec("INSERT INTO outbox_schema_migrations \\(version\\) VALUES \\(\\?\\)").
+		WithArgs("0002_checkpoints.sql").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	err = Migrate(context.Background(), db)
 	assert.NoError(t, err)
@@ -41,6 +49,9 @@ func TestMigrate_SkipsAlreadyAppliedMigration(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock_.ExpectQuery("SELECT 1 FROM outbox_schema_migrations WHERE version = \\?").
 		WithArgs("0001_init.sql").
+		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
+	mock_.ExpectQuery("SELECT 1 FROM outbox_schema_migrations WHERE version = \\?").
+		WithArgs("0002_checkpoints.sql").
 		WillReturnRows(sqlmock.NewRows([]string{"1"}).AddRow(1))
 
 	err = Migrate(context.Background(), db)
