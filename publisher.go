@@ -11,11 +11,16 @@ import (
 	"go.uber.org/zap"
 )
 
-// Publisher публикует заклеймленное событие во внешнюю систему обмена
-// сообщениями. Единственная реализация в проде — KafkaPublisher;
+// Publisher асинхронно публикует заклеймленное событие во внешнюю систему
+// обмена сообщениями. Publish возвращает ошибку немедленно только при сбое
+// постановки в очередь (enqueue); в остальных случаях возвращает nil сразу
+// же и ровно один раз вызывает onDelivery, когда придёт отчёт о доставке
+// (успех или ошибка) — как правило, из другой горутины. Это позволяет
+// пайплайнить публикацию целой пачки событий, не дожидаясь подтверждения
+// каждого по отдельности. Единственная реализация в проде — KafkaPublisher;
 // NopPublisher существует для тестов.
 type Publisher interface {
-	Publish(ctx context.Context, event EventRecord) error
+	Publish(ctx context.Context, event EventRecord, onDelivery func(error)) error
 	Close() error
 }
 
@@ -29,7 +34,8 @@ func NewDefaultPublisher(logger *zap.Logger) *NopPublisher {
 	}
 }
 
-func (p *NopPublisher) Publish(_ context.Context, _ EventRecord) error {
+func (p *NopPublisher) Publish(_ context.Context, _ EventRecord, onDelivery func(error)) error {
+	onDelivery(nil)
 	return nil
 }
 
@@ -102,17 +108,30 @@ func NewKafkaPublisherFromProducer(logger *zap.Logger, producer *kafka.Producer,
 		config:   config,
 	}
 
-	// Publish всегда передаёт Produce() явный per-call deliveryChan, поэтому
-	// отчёты о доставке конкретных сообщений сюда не попадают. Но клиентские
-	// события уровня продюсера (например, потеря соединения с брокером)
-	// всё равно идут в общий Events() — если их не вычитывать, канал может
-	// заполниться и застопорить внутреннюю обработку событий продюсера.
-	go p.logClientErrors()
+	// Publish передаёт Produce() nil вместо per-call deliveryChan — отчёты о
+	// доставке всех сообщений идут в общий Events(), откуда одна горутина
+	// разбирает их по Opaque и асинхронно вызывает соответствующий
+	// onDelivery. Это позволяет пайплайнить produce всей пачки батча, не
+	// дожидаясь ack каждого сообщения по отдельности: enable.idempotence
+	// вместе с max.in.flight.requests.per.connection=5 гарантирует, что
+	// брокер подтверждает сообщения в том же порядке, в котором они были
+	// отправлены на конкретную партицию, так что порядок в пределах одного
+	// aggregate_id сохраняется даже при нескольких одновременно летящих
+	// запросах.
+	go p.handleDeliveryReports()
 
 	return p
 }
 
-func (p *KafkaPublisher) Publish(ctx context.Context, event EventRecord) error {
+// deliveryCallback — корреляция отчёта о доставке с исходным вызовом
+// Publish через поле Opaque сообщения Kafka.
+type deliveryCallback struct {
+	eventID    string
+	topic      string
+	onDelivery func(error)
+}
+
+func (p *KafkaPublisher) Publish(_ context.Context, event EventRecord, onDelivery func(error)) error {
 	topic := event.Topic
 	if topic == "" {
 		topic = p.config.Topic
@@ -130,32 +149,17 @@ func (p *KafkaPublisher) Publish(ctx context.Context, event EventRecord) error {
 		Value:          event.Payload,
 		Headers:        p.config.HeaderBuilder(event),
 		Timestamp:      time.Now(),
+		Opaque: &deliveryCallback{
+			eventID:    event.EventID,
+			topic:      topic,
+			onDelivery: onDelivery,
+		},
 	}
 
-	deliveryChan := make(chan kafka.Event, 1)
-	if err := p.producer.Produce(message, deliveryChan); err != nil {
+	if err := p.producer.Produce(message, nil); err != nil {
 		return fmt.Errorf("failed to enqueue message to kafka: %w", err)
 	}
-
-	select {
-	case e := <-deliveryChan:
-		msg, ok := e.(*kafka.Message)
-		if !ok {
-			return fmt.Errorf("unexpected delivery event type: %T", e)
-		}
-		if msg.TopicPartition.Error != nil {
-			return fmt.Errorf("kafka delivery failed: %w", msg.TopicPartition.Error)
-		}
-		p.logger.Debug("Event delivered to Kafka",
-			zap.String("event_id", event.EventID),
-			zap.String("topic", topic),
-			zap.Int32("partition", msg.TopicPartition.Partition),
-			zap.Any("offset", msg.TopicPartition.Offset),
-		)
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("context cancelled waiting for kafka delivery: %w", ctx.Err())
-	}
+	return nil
 }
 
 func (p *KafkaPublisher) Close() error {
@@ -181,10 +185,32 @@ func (p *KafkaPublisher) Close() error {
 	return flushErr
 }
 
-func (p *KafkaPublisher) logClientErrors() {
+func (p *KafkaPublisher) handleDeliveryReports() {
 	for e := range p.producer.Events() {
-		if kafkaErr, ok := e.(kafka.Error); ok {
-			p.logger.Error("outbox: kafka client error", zap.Error(kafkaErr))
+		switch ev := e.(type) {
+		case *kafka.Message:
+			cb, ok := ev.Opaque.(*deliveryCallback)
+			if !ok || cb == nil || cb.onDelivery == nil {
+				continue
+			}
+			if ev.TopicPartition.Error != nil {
+				p.logger.Debug("outbox: kafka delivery failed",
+					zap.String("event_id", cb.eventID),
+					zap.String("topic", cb.topic),
+					zap.Error(ev.TopicPartition.Error),
+				)
+				cb.onDelivery(fmt.Errorf("kafka delivery failed: %w", ev.TopicPartition.Error))
+				continue
+			}
+			p.logger.Debug("outbox: event delivered to kafka",
+				zap.String("event_id", cb.eventID),
+				zap.String("topic", cb.topic),
+				zap.Int32("partition", ev.TopicPartition.Partition),
+				zap.Any("offset", ev.TopicPartition.Offset),
+			)
+			cb.onDelivery(nil)
+		case kafka.Error:
+			p.logger.Error("outbox: kafka client error", zap.Error(ev))
 		}
 	}
 }

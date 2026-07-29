@@ -4,15 +4,21 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
 )
 
-// publishBatch публикует ранее заклеймленные события в Kafka строго
-// последовательно, в том порядке, в котором они были прочитаны из БД
-// (claimBatch сортирует по created_at, id) — это и есть гарантия
-// сохранения порядка публикации в пределах одного тика лидера.
+// publishBatch публикует все ранее заклеймленные события пачки, не
+// дожидаясь подтверждения доставки каждого по отдельности — все Produce()
+// отправляются сразу (пайплайн), а сам тик завершается только когда придут
+// отчёты о доставке для всех событий. enable.idempotence вместе с
+// max.in.flight.requests.per.connection=5 (см. DefaultKafkaConfig)
+// гарантирует, что брокер подтверждает сообщения одной партиции (одного
+// aggregate_id) строго в том порядке, в котором они были отправлены — так
+// порядок публикации в пределах aggregate_id сохраняется даже при
+// нескольких одновременно летящих запросах.
 func (d *Dispatcher) publishBatch(ctx context.Context, events []EventRecord) {
 	if len(events) == 0 {
 		return
@@ -23,32 +29,52 @@ func (d *Dispatcher) publishBatch(ctx context.Context, events []EventRecord) {
 		d.metrics.RecordDuration("outbox.publish_batch.duration", time.Since(start), nil)
 	}()
 
-	processed, failed := 0, 0
+	var wg sync.WaitGroup
+	wg.Add(len(events))
 
 	for _, event := range events {
-		if err := d.publishEvent(ctx, event); err != nil {
-			failed++
-			d.metrics.IncrementCounter("outbox.publish_batch.processed", map[string]string{"status": "failed"})
-			d.logger.Error("outbox: failed to process event", zap.Int64("id", event.ID), zap.Error(err))
-			continue
+		event := event
+		attempt := event.AttemptCount + 1
+
+		onDelivery := func(deliveryErr error) {
+			defer wg.Done()
+			d.completePublish(event, attempt, deliveryErr)
 		}
-		processed++
-		d.metrics.IncrementCounter("outbox.publish_batch.processed", map[string]string{"status": "success"})
+
+		if err := d.publisher.Publish(ctx, event, onDelivery); err != nil {
+			wg.Done()
+			d.logger.Error("outbox: failed to enqueue event for publishing",
+				zap.Int64("id", event.ID), zap.Error(err))
+			d.completePublish(event, attempt, err)
+		}
 	}
 
-	d.logger.Debug("outbox: batch processing completed",
-		zap.Int("processed", processed),
-		zap.Int("failed", failed),
-	)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-ctx.Done():
+		// Отчёты о доставке, которые придут после этого момента, всё равно
+		// будут обработаны — completePublish использует собственный,
+		// независимый от ctx контекст для обновления статуса в БД, — но
+		// текущий тик не будет их дожидаться, чтобы штатная остановка не
+		// зависала на медленном брокере.
+		d.logger.Warn("outbox: context cancelled while waiting for kafka delivery reports", zap.Error(ctx.Err()))
+	}
 }
 
-func (d *Dispatcher) publishEvent(ctx context.Context, event EventRecord) error {
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("context cancelled: %w", ctx.Err())
-	default:
-	}
-
+// completePublish вызывается асинхронно, когда приходит отчёт о доставке
+// (или немедленно, если публикация не удалось поставить в очередь).
+// Использует собственный ограниченный по времени контекст, а не ctx
+// reconcile-тика: отчёт может прийти уже после того, как publishBatch
+// перестал ждать (например, из-за отмены ctx при остановке), и финальный
+// статус в БД всё равно должен быть записан, а не потерян из-за отменённого
+// контекста.
+func (d *Dispatcher) completePublish(event EventRecord, attempt int, deliveryErr error) {
 	fields := []zap.Field{
 		zap.Int64("id", event.ID),
 		zap.String("event_id", event.EventID),
@@ -56,18 +82,20 @@ func (d *Dispatcher) publishEvent(ctx context.Context, event EventRecord) error 
 		zap.String("aggregate_id", event.AggregateID),
 		zap.String("aggregate_type", event.AggregateType),
 		zap.String("topic", event.Topic),
-		zap.Int("attempt", event.AttemptCount),
+		zap.Int("attempt", attempt),
 	}
 
-	attempt := event.AttemptCount + 1
+	updateCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
-	if err := d.publisher.Publish(ctx, event); err != nil {
+	if deliveryErr != nil {
 		d.metrics.IncrementCounter("outbox.publish.result", map[string]string{
 			"event_type": event.EventType,
 			"status":     "failed",
 		})
-		d.logger.Error("outbox: failed to publish event to kafka", append(fields, zap.Error(err))...)
-		return d.handlePublishError(ctx, event, attempt, err)
+		d.logger.Error("outbox: failed to publish event to kafka", append(fields, zap.Error(deliveryErr))...)
+		d.handlePublishError(updateCtx, event, attempt, deliveryErr)
+		return
 	}
 
 	d.metrics.IncrementCounter("outbox.publish.result", map[string]string{
@@ -75,11 +103,10 @@ func (d *Dispatcher) publishEvent(ctx context.Context, event EventRecord) error 
 		"status":     "success",
 	})
 	d.logger.Debug("outbox: event published successfully", fields...)
-
-	return d.handlePublishSuccess(ctx, event, attempt)
+	d.handlePublishSuccess(updateCtx, event, attempt)
 }
 
-func (d *Dispatcher) handlePublishError(ctx context.Context, event EventRecord, attempt int, publishErr error) error {
+func (d *Dispatcher) handlePublishError(ctx context.Context, event EventRecord, attempt int, publishErr error) {
 	fields := []zap.Field{
 		zap.Int64("id", event.ID),
 		zap.String("event_id", event.EventID),
@@ -105,18 +132,14 @@ func (d *Dispatcher) handlePublishError(ctx context.Context, event EventRecord, 
 	if err := d.updateStatus(ctx, event.ID, newStatus, attempt, nextAttemptAt, publishErr); err != nil {
 		d.logger.Error("outbox: failed to update event status after publish error", append(fields, zap.Error(err))...)
 	}
-
-	return fmt.Errorf("failed to publish event %d (attempt %d/%d): %w", event.ID, attempt, d.maxAttempts, publishErr)
 }
 
-func (d *Dispatcher) handlePublishSuccess(ctx context.Context, event EventRecord, attempt int) error {
+func (d *Dispatcher) handlePublishSuccess(ctx context.Context, event EventRecord, attempt int) {
 	if err := d.updateStatus(ctx, event.ID, EventRecordStatusSent, attempt, nil, nil); err != nil {
 		d.logger.Error("outbox: event published but failed to update status to sent",
 			zap.Int64("id", event.ID), zap.Error(err))
 		d.metrics.IncrementCounter("outbox.db_update_failed", map[string]string{"operation": "success_handling"})
-		return fmt.Errorf("event %d published successfully but failed to update status: %w", event.ID, err)
 	}
-	return nil
 }
 
 func (d *Dispatcher) updateStatus(ctx context.Context, eventID int64, status, attemptCount int, nextAttemptAt *time.Time, lastErr error) error {

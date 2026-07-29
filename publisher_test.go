@@ -25,9 +25,16 @@ func TestDefaultPublisherPublish(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	err := publisher.Publish(ctx, event)
+	var deliveryErr error
+	delivered := false
+	err := publisher.Publish(ctx, event, func(err error) {
+		delivered = true
+		deliveryErr = err
+	})
 
 	assert.NoError(t, err, "Expected no error")
+	assert.True(t, delivered, "Expected onDelivery to be called")
+	assert.NoError(t, deliveryErr)
 }
 
 func TestDefaultKafkaConfig(t *testing.T) {

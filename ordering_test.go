@@ -54,10 +54,11 @@ func newRecordingPublisher() *recordingPublisher {
 	return &recordingPublisher{byAggregate: make(map[string][]string)}
 }
 
-func (p *recordingPublisher) Publish(_ context.Context, event EventRecord) error {
+func (p *recordingPublisher) Publish(_ context.Context, event EventRecord, onDelivery func(error)) error {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	p.byAggregate[event.AggregateID] = append(p.byAggregate[event.AggregateID], event.EventID)
+	p.mu.Unlock()
+	onDelivery(nil)
 	return nil
 }
 
