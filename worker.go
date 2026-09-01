@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -55,7 +56,7 @@ func (w *BaseWorker) Start(ctx context.Context) {
 			w.logger.Info("Stop signal received, stopping worker", zap.String("name", w.name))
 			return
 		case <-ticker.C:
-			if err := w.workFunc(ctx); err != nil {
+			if err := w.workFunc(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				w.logger.Error("Worker execution failed",
 					zap.String("name", w.name),
 					zap.Error(err))
